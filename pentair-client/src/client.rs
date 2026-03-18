@@ -74,7 +74,15 @@ impl Client {
         self.reader.read_exact(&mut header_buf).await?;
         let header = decode_header(&header_buf)?;
 
-        // Read payload
+        // Read payload (cap at 64KB to prevent malformed messages from exhausting memory)
+        const MAX_PAYLOAD: u32 = 64 * 1024;
+        if header.data_length > MAX_PAYLOAD {
+            return Err(ClientError::Protocol(
+                pentair_protocol::error::ProtocolError::InvalidData(
+                    format!("payload too large: {} bytes (max {})", header.data_length, MAX_PAYLOAD)
+                )
+            ));
+        }
         let mut payload = vec![0u8; header.data_length as usize];
         if !payload.is_empty() {
             self.reader.read_exact(&mut payload).await?;

@@ -137,8 +137,9 @@ body {
 
 /* ── Lights (bottom of pool) ────────────── */
 .lights-strip {
-  position: absolute; bottom: 8px; left: 8px;
+  position: absolute; bottom: 8px; left: 8px; right: 8px;
   z-index: 5; display: flex; align-items: center; gap: 5px;
+  overflow: hidden;
 }
 .lt-sel {
   width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
@@ -152,11 +153,15 @@ body {
 .lt-sel.on { border-color: rgba(255,255,255,0.5); }
 .color-scroll {
   display: flex; gap: 5px;
-  max-width: 0; overflow: hidden;
+  max-width: 0;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
   transition: max-width 0.35s ease, opacity 0.3s;
   opacity: 0;
 }
-.color-scroll.open { max-width: 500px; opacity: 1; }
+.color-scroll::-webkit-scrollbar { display: none; }
+.color-scroll.open { max-width: 100%; opacity: 1; cursor: grab; touch-action: pan-x; }
 .cswatch {
   width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
   border: 2px solid transparent; cursor: pointer;
@@ -432,6 +437,18 @@ function openSet(b){setB=b;const d=b==='pool'?S.pool:S.spa;if(!d)return;setV=d.s
 function closeSet(){document.getElementById('ov').classList.remove('open');setB=null;}
 function adj(d){setV=Math.max(40,Math.min(104,setV+d));document.getElementById('shV').textContent=setV;}
 async function confirmSet(){if(!setB)return;await post('/api/'+setB+'/heat',{setpoint:setV});closeSet();setTimeout(refresh,2000);}
+
+// Drag-to-scroll for the color strip (works on both mouse and touch)
+(function(){
+  const el=document.getElementById('cs');
+  let down=false, startX=0, scrollL=0, moved=false;
+  el.addEventListener('mousedown',e=>{down=true;moved=false;startX=e.pageX;scrollL=el.scrollLeft;el.style.cursor='grabbing';e.preventDefault();});
+  el.addEventListener('mousemove',e=>{if(!down)return;moved=true;el.scrollLeft=scrollL-(e.pageX-startX);});
+  document.addEventListener('mouseup',()=>{down=false;el.style.cursor='';});
+  el.addEventListener('mouseleave',()=>{down=false;el.style.cursor='';});
+  // Prevent click on swatches if user was dragging
+  el.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();}},{capture:true});
+})();
 
 refresh();connectWs();setInterval(refresh,15000);
 </script>

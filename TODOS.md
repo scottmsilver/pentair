@@ -2,12 +2,12 @@
 
 ## P1 — Blocks Phase 2
 
-### Define daemon REST API contract
-**What:** REST API spec for pentair-daemon — every endpoint, request/response JSON shapes, WebSocket event format.
+### Document daemon REST API contract
+**What:** Formal API spec document for pentair-daemon — every endpoint, request/response JSON shapes, WebSocket event format.
 **Why:** Unblocks parallel work on Android app + Google Home integration. Prevents API rework.
-**Context:** Agreed during eng review (Issue 2). The spec should map CLI commands to REST endpoints, define JSON response shapes matching the protocol types, and document WebSocket subscription/push format.
-**Effort:** S (CC: ~30 min)
-**Depends on:** Design spec (done), protocol types (done). Build before starting Phase 2 consumers.
+**Context:** The semantic API (`GET /api/pool`, `POST /api/spa/on`, etc.) is implemented and working. Needs a formal spec document for external consumers.
+**Effort:** S (CC: ~15 min)
+**Depends on:** Semantic API (done).
 
 ## P3 — Deferred features
 
