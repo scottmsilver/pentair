@@ -1,0 +1,10 @@
+[package]
+name = "pentair-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pentair-protocol = { path = "../pentair-protocol" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
