@@ -48,7 +48,7 @@ body {
 
 /* ── Deck ───────────────────────────────── */
 .deck {
-  margin: 0 auto; padding: 3px; border-radius: 12px;
+  margin: 0 0 0 8px; padding: 3px; border-radius: 14px;
   width: 65%; max-width: 260px;
   background: linear-gradient(135deg, var(--deck-light) 0%, var(--deck) 30%, var(--deck-light) 60%, var(--deck) 100%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4);
@@ -103,74 +103,60 @@ body {
 .on .wlabel { color: rgba(255,255,255,0.55); }
 .wtemp { font-size: 32px; font-weight: 700; color: rgba(255,255,255,0.5); line-height: 1; letter-spacing: -2px; transition: color 0.5s; }
 .on .wtemp { color: var(--text-bright); text-shadow: 0 2px 20px rgba(0,0,0,0.3); }
-.wtemp .deg { font-size: 14px; font-weight: 400; opacity: 0.5; }
+.wtemp .deg { font-weight: 400; opacity: 0.5; }
 .wset { font-size: 11px; color: var(--text-faint); margin-top: 2px; cursor: pointer; }
 .on .wset { color: rgba(255,255,255,0.5); }
 .wset:active { color: var(--accent) !important; }
 .wheat { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; color: var(--warm); opacity: 0; transition: opacity 0.3s; }
 .wheat.on { opacity: 1; }
 
-/* ── Spa toggle ─────────────────────────── */
-.spa-tog {
-  position: absolute; top: 6px; right: 6px; z-index: 5;
-  width: 34px; height: 20px; border-radius: 13px;
-  background: rgba(255,255,255,0.12); border: none; cursor: pointer; transition: background 0.3s;
-}
-.spa-tog::after {
-  content: ''; position: absolute; top: 2px; left: 2px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: rgba(255,255,255,0.45);
-  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), background 0.3s;
-}
-.spa-tog.on { background: var(--teal); }
-.spa-tog.on::after { transform: translateX(14px); background: white; }
 
-/* ── Jets ───────────────────────────────── */
-.jets {
-  display: none; margin-top: 4px;
-  padding: 3px 10px; border-radius: 10px;
-  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
-  color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 500;
+/* ── Spa segmented control (Off / Spa / Spa+Jets) ── */
+.spa-seg {
+  display: none;
+  position: absolute; bottom: 6px; left: 6px; right: 6px;
+  z-index: 4;
+  justify-content: center; gap: 2px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px; padding: 3px;
+}
+.spa-seg.vis { display: flex; }
+.spa-seg-btn {
+  flex: 1; padding: 4px 0; border-radius: 8px;
+  background: transparent; border: none;
+  color: rgba(255,255,255,0.35);
+  font-size: 9px; font-weight: 600;
   cursor: pointer; transition: all 0.3s;
+  text-align: center;
 }
-.jets.vis { display: inline-block; }
-.jets:active { transform: scale(0.93); }
-.jets.active { background: rgba(20,184,166,0.25); border-color: rgba(20,184,166,0.6); color: var(--teal); }
+.spa-seg-btn:active { opacity: 0.7; }
+.spa-seg-btn.active {
+  background: rgba(20, 184, 166, 0.3);
+  color: var(--teal);
+}
 
-/* ── Lights picker (bottom of pool) ─────── */
-.lights-area {
+/* ── Lights (bottom of pool) ────────────── */
+.lights-strip {
   position: absolute; bottom: 8px; left: 8px;
   z-index: 5; display: flex; align-items: center; gap: 5px;
 }
-
-.lights-selected {
+.lt-sel {
   width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
-  border: 2px solid rgba(255,255,255,0.3);
-  cursor: pointer; transition: all 0.3s;
-  position: relative;
+  border: 2px solid rgba(255,255,255,0.25);
+  background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; color: rgba(255,255,255,0.35);
+  transition: all 0.3s;
 }
-.lights-selected:active { transform: scale(0.9); }
-.lights-selected.on { border-color: rgba(255,255,255,0.6); }
-/* "Off" state: circle with diagonal line */
-.lights-selected.off-state {
-  background: rgba(255,255,255,0.08);
-  overflow: hidden;
-}
-.lights-selected.off-state::after {
-  content: ''; position: absolute;
-  top: 50%; left: -2px; right: -2px;
-  height: 2px; background: rgba(255,255,255,0.4);
-  transform: rotate(-45deg);
-}
-
-.color-tray {
-  display: flex; gap: 4px;
+.lt-sel:active { transform: scale(0.9); }
+.lt-sel.on { border-color: rgba(255,255,255,0.5); }
+.color-scroll {
+  display: flex; gap: 5px;
   max-width: 0; overflow: hidden;
-  transition: max-width 0.3s ease, opacity 0.3s;
+  transition: max-width 0.35s ease, opacity 0.3s;
   opacity: 0;
 }
-.color-tray.open { max-width: 300px; opacity: 1; }
-
+.color-scroll.open { max-width: 500px; opacity: 1; }
 .cswatch {
   width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
   border: 2px solid transparent; cursor: pointer;
@@ -181,17 +167,11 @@ body {
   border-color: white;
   box-shadow: 0 0 6px rgba(255,255,255,0.3);
 }
-
-/* Off swatch in tray */
+/* Off swatch */
 .cswatch.off-swatch {
   background: rgba(255,255,255,0.08);
-  position: relative; overflow: hidden;
-}
-.cswatch.off-swatch::after {
-  content: ''; position: absolute;
-  top: 50%; left: -2px; right: -2px;
-  height: 2px; background: rgba(255,255,255,0.4);
-  transform: rotate(-45deg);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: rgba(255,255,255,0.4);
 }
 /* Color gradients for each mode */
 .cswatch[data-mode="swim"]      { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
@@ -294,19 +274,22 @@ body {
     </div>
   </div>
 
-  <div class="spa" id="spa" onclick="toggleSpa()">
-    <button class="spa-tog" id="spaTog" onclick="event.stopPropagation(); toggleSpa()"></button>
+  <div class="spa" id="spa">
     <div class="spa-info">
-            <div class="wtemp" id="sT">--<span class="deg">°</span></div>
+      <div class="wtemp" id="sT">--<span class="deg">°</span></div>
       <div class="wset" id="sS" onclick="event.stopPropagation(); openSet('spa')">set --°</div>
       <div class="wheat" id="sH">Heating</div>
-      <button class="jets" id="jets" onclick="event.stopPropagation(); toggleJets()">Jets</button>
+    </div>
+    <div class="spa-seg" id="spaSeg">
+      <button class="spa-seg-btn" data-state="off" onclick="event.stopPropagation(); setSpaState('off')">Off</button>
+      <button class="spa-seg-btn" data-state="spa" onclick="event.stopPropagation(); setSpaState('spa')">Spa</button>
+      <button class="spa-seg-btn" data-state="jets" onclick="event.stopPropagation(); setSpaState('jets')">Jets</button>
     </div>
   </div>
 
-  <div class="lights-area">
-    <div class="lights-selected off-state" id="litSel" onclick="toggleTray()"></div>
-    <div class="color-tray" id="litTray"></div>
+  <div class="lights-strip">
+    <div class="lt-sel" id="ltSel" onclick="event.stopPropagation(); document.getElementById('cs').classList.toggle('open')">⏻</div>
+    <div class="color-scroll" id="cs"></div>
   </div>
 </div></div>
 
@@ -355,12 +338,17 @@ function render(){
     document.getElementById('sT').innerHTML=S.spa.temperature+'<span class="deg">°</span>';
     document.getElementById('sS').textContent='set '+S.spa.setpoint+'°';
     document.getElementById('spa').classList.toggle('on',S.spa.on);
-    document.getElementById('spaTog').classList.toggle('on',S.spa.on);
     document.getElementById('sH').classList.toggle('on',S.spa.heating!=='off');
-    const j=document.getElementById('jets');
-    const hj=S.spa.accessories&&S.spa.accessories.jets!==undefined;
-    j.classList.toggle('vis',hj);
-    if(hj)j.classList.toggle('active',S.spa.accessories.jets);
+    // Segmented control state
+    const seg=document.getElementById('spaSeg');
+    const hasJets=S.spa.accessories&&S.spa.accessories.jets!==undefined;
+    seg.classList.toggle('vis',true);
+    let spaState='off';
+    if(S.spa.on&&hasJets&&S.spa.accessories.jets) spaState='jets';
+    else if(S.spa.on) spaState='spa';
+    seg.querySelectorAll('.spa-seg-btn').forEach(b=>{
+      b.classList.toggle('active',b.dataset.state===spaState);
+    });
   }
   if(S.pool){
     document.getElementById('pT').innerHTML=S.pool.temperature+'<span class="deg">°</span>';
@@ -369,36 +357,33 @@ function render(){
     document.getElementById('pH').classList.toggle('on',S.pool.heating!=='off');
   }
   if(S.lights){
-    const sel=document.getElementById('litSel');
-    const isOn=S.lights.on;
-    const mode=S.lights.mode;
-    // Update the selected circle to show current mode color
-    sel.className='lights-selected'+(isOn?' on':'');
-    if(!isOn||!mode){
-      sel.classList.add('off-state');
-      sel.style.background='';
+    const sel=document.getElementById('ltSel');
+    if(S.lights.on&&S.lights.mode){
+      sel.classList.add('on');
+      sel.style.background=getModeColor(S.lights.mode);
+      sel.textContent='';
     } else {
-      sel.dataset.mode=mode;
-      // Copy the gradient from CSS by setting the mode attribute
-      sel.style.background=getModeColor(mode);
+      sel.classList.remove('on');
+      sel.style.background='';
+      sel.textContent='⏻';
     }
-    // Build tray swatches once
-    const tray=document.getElementById('litTray');
-    if(!tray.children.length){
-      // Off swatch first
+    const cs=document.getElementById('cs');
+    if(!cs.children.length){
+      // Off swatch
       const off=document.createElement('div');
       off.className='cswatch off-swatch';
-      off.onclick=()=>{setMode('off');closeTray();};
-      tray.appendChild(off);
+      off.textContent='⏻';
+      off.onclick=()=>{setMode('off');cs.classList.remove('open');};
+      cs.appendChild(off);
       MODES.forEach(m=>{
         const d=document.createElement('div');
         d.className='cswatch'; d.dataset.mode=m;
         d.style.background=getModeColor(m);
-        d.onclick=()=>{setMode(m);closeTray();};
-        tray.appendChild(d);
+        d.onclick=()=>{setMode(m);cs.classList.remove('open');};
+        cs.appendChild(d);
       });
     }
-    tray.querySelectorAll('.cswatch[data-mode]').forEach(d=>d.classList.toggle('on',d.dataset.mode===mode));
+    cs.querySelectorAll('.cswatch[data-mode]').forEach(d=>d.classList.toggle('on',d.dataset.mode===S.lights.mode));
   }
 
   const ax=document.getElementById('axs');
@@ -425,11 +410,19 @@ function getModeColor(m){
   const c={swim:'linear-gradient(135deg,#0ea5e9,#14b8a6)',party:'conic-gradient(#ef4444,#eab308,#22c55e,#3b82f6,#a855f7,#ef4444)',romantic:'linear-gradient(135deg,#ec4899,#f59e0b)',caribbean:'linear-gradient(135deg,#06b6d4,#2dd4bf)',american:'linear-gradient(135deg,#ef4444,#eff6ff,#3b82f6)',sunset:'linear-gradient(135deg,#f97316,#dc2626)',royal:'linear-gradient(135deg,#7c3aed,#3b82f6)',blue:'#3b82f6',green:'#22c55e',red:'#ef4444',white:'radial-gradient(circle,#fff,#cbd5e1)',purple:'#a855f7'};
   return c[m]||'rgba(255,255,255,0.1)';
 }
-function toggleTray(){document.getElementById('litTray').classList.toggle('open');}
-function closeTray(){document.getElementById('litTray').classList.remove('open');}
-
-async function toggleSpa(){if(!S?.spa)return;await post(S.spa.on?'/api/spa/off':'/api/spa/on');setTimeout(refresh,1500);}
-async function toggleJets(){if(!S?.spa?.accessories)return;const on=S.spa.accessories.jets;await post('/api/spa/jets/'+(on?'off':'on'));setTimeout(refresh,1500);}
+async function setSpaState(state){
+  if(!S?.spa)return;
+  if(state==='off'){
+    await post('/api/spa/off');
+  } else if(state==='spa'){
+    if(!S.spa.on) await post('/api/spa/on');
+    if(S.spa.accessories?.jets) await post('/api/spa/jets/off');
+  } else if(state==='jets'){
+    if(!S.spa.on) await post('/api/spa/on');
+    await post('/api/spa/jets/on');
+  }
+  setTimeout(refresh,1500);
+}
 async function setMode(m){if(m==='off'){await post('/api/lights/off');}else{await post('/api/lights/mode',{mode:m});if(!S.lights.on)await post('/api/lights/on');}setTimeout(refresh,500);}
 async function toggleAux(id){const a=S.auxiliaries.find(x=>x.id===id);if(!a)return;await post('/api/auxiliary/'+id+'/'+(a.on?'off':'on'));setTimeout(refresh,1000);}
 
