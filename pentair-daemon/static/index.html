@@ -8,529 +8,397 @@
 <title>Pool</title>
 <style>
 :root {
-  --bg: #0f172a;
-  --card: rgba(30, 41, 59, 0.8);
-  --card-active: rgba(30, 58, 90, 0.9);
+  --bg: #0c1222;
+  --deck: #2a3040;
+  --deck-light: #353d4f;
+  --water-off: #162030;
+  --pool-blue: #0a5a8c;
+  --pool-blue-light: #1080b8;
+  --spa-teal: #0e6e6e;
+  --spa-teal-light: #18a8a0;
   --accent: #38bdf8;
-  --warm: #fb923c;
-  --hot: #ef4444;
+  --teal: #2dd4bf;
+  --warm: #f97316;
+  --gold: #eab308;
   --text: #e2e8f0;
   --text-dim: #94a3b8;
+  --text-faint: rgba(255,255,255,0.35);
   --text-bright: #f8fafc;
-  --spa-glow: rgba(20, 184, 166, 0.4);
-  --pool-glow: rgba(56, 189, 248, 0.3);
-  --radius: 24px;
 }
-
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html { height: 100%; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
-  background: var(--bg);
-  background-image: radial-gradient(ellipse at 20% 0%, rgba(14,165,233,0.08) 0%, transparent 60%),
-                    radial-gradient(ellipse at 80% 100%, rgba(20,184,166,0.06) 0%, transparent 60%);
-  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  background: var(--bg); color: var(--text);
   min-height: 100%;
-  padding: 0 0 env(safe-area-inset-bottom);
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
-/* ── Header ─────────────────────────────────────── */
-.header {
-  padding: 16px 20px 8px;
-  display: flex; justify-content: space-between; align-items: center;
+/* ── Header ─────────────────────────────── */
+.hdr { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px; }
+.hdr-l { display: flex; align-items: center; gap: 10px; }
+.hdr-dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
+.hdr-dot.off { background: #ef4444; }
+.hdr h1 { font-size: 28px; font-weight: 700; color: var(--text-bright); }
+.hdr-r { text-align: right; }
+.hdr-temp { font-size: 28px; font-weight: 700; color: var(--text-bright); }
+.hdr-sub { font-size: 12px; color: var(--text-dim); }
+
+/* ── Deck ───────────────────────────────── */
+.deck {
+  margin: 0 16px; padding: 12px; border-radius: 24px;
+  background: linear-gradient(135deg, var(--deck-light) 0%, var(--deck) 30%, var(--deck-light) 60%, var(--deck) 100%);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4);
 }
-.header-left { display: flex; align-items: center; gap: 8px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; flex-shrink: 0; }
-.dot.off { background: #ef4444; }
-.header h1 { font-size: 17px; font-weight: 600; color: var(--text-bright); }
-.air-temp { font-size: 13px; color: var(--text-dim); }
+.deck-inner { position: relative; width: 75%; aspect-ratio: 2/3; margin: 0 auto; }
 
-/* ── Cards ──────────────────────────────────────── */
-.cards { padding: 8px 16px; display: flex; flex-direction: column; gap: 12px; }
+/* ── Pool ───────────────────────────────── */
+.pool {
+  position: absolute; inset: 0; border-radius: 16px;
+  background: var(--water-off); transition: all 0.6s; overflow: hidden;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3), inset 0 2px 4px rgba(0,0,0,0.2);
+}
+.pool.on { background: linear-gradient(175deg, var(--pool-blue) 0%, var(--pool-blue-light) 60%, var(--pool-blue) 100%); }
+.pool.on::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 20% 70%, rgba(255,255,255,0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 65% 25%, rgba(255,255,255,0.03) 0%, transparent 40%);
+  animation: pshim 10s ease-in-out infinite alternate;
+}
+@keyframes pshim { 0%{opacity:.5} 50%{opacity:1} 100%{opacity:.6} }
 
-.card {
-  background: var(--card);
-  border-radius: var(--radius);
-  padding: 20px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255,255,255,0.06);
-  transition: all 0.4s ease;
+/* ── Spa ────────────────────────────────── */
+.spa {
+  position: absolute; top: 0; left: 0;
+  width: 42%; height: 55%; border-radius: 16px;
+  background: var(--water-off); cursor: pointer;
+  transition: all 0.6s; overflow: hidden; z-index: 2;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3), inset 0 2px 4px rgba(0,0,0,0.2);
+  outline: 10px solid var(--deck);
+}
+.spa.on { background: linear-gradient(160deg, var(--spa-teal) 0%, var(--spa-teal-light) 70%, var(--spa-teal) 100%); }
+.spa.on::before {
+  content: ''; position: absolute; inset: -20px; pointer-events: none;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.12) 0%, transparent 30%),
+    radial-gradient(circle at 70% 50%, rgba(255,255,255,0.08) 0%, transparent 25%),
+    radial-gradient(circle at 50% 80%, rgba(255,255,255,0.10) 0%, transparent 28%),
+    radial-gradient(circle at 80% 20%, rgba(255,255,255,0.09) 0%, transparent 26%);
+  animation: caustics 4s ease-in-out infinite alternate;
+}
+@keyframes caustics {
+  0%{transform:translate(0,0) scale(1);opacity:.6}
+  33%{transform:translate(3px,-2px) scale(1.03);opacity:1}
+  66%{transform:translate(-2px,3px) scale(.98);opacity:.8}
+  100%{transform:translate(1px,1px) scale(1.01);opacity:.7}
+}
+
+/* ── Info overlays ──────────────────────── */
+.pool-info { position: absolute; bottom: 60px; right: 20px; text-align: right; z-index: 1; }
+.spa-info { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; z-index: 3; width: 85%; }
+
+.wlabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-faint); }
+.on .wlabel { color: rgba(255,255,255,0.55); }
+.wtemp { font-size: 46px; font-weight: 700; color: rgba(255,255,255,0.5); line-height: 1; letter-spacing: -2px; transition: color 0.5s; }
+.on .wtemp { color: var(--text-bright); text-shadow: 0 2px 20px rgba(0,0,0,0.3); }
+.wtemp .deg { font-size: 20px; font-weight: 400; opacity: 0.5; }
+.wset { font-size: 13px; color: var(--text-faint); margin-top: 2px; cursor: pointer; }
+.on .wset { color: rgba(255,255,255,0.5); }
+.wset:active { color: var(--accent) !important; }
+.wheat { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; color: var(--warm); opacity: 0; transition: opacity 0.3s; }
+.wheat.on { opacity: 1; }
+
+/* ── Spa toggle ─────────────────────────── */
+.spa-tog {
+  position: absolute; top: 8px; right: 8px; z-index: 5;
+  width: 42px; height: 25px; border-radius: 13px;
+  background: rgba(255,255,255,0.12); border: none; cursor: pointer; transition: background 0.3s;
+}
+.spa-tog::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 21px; height: 21px; border-radius: 50%;
+  background: rgba(255,255,255,0.45);
+  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), background 0.3s;
+}
+.spa-tog.on { background: var(--teal); }
+.spa-tog.on::after { transform: translateX(17px); background: white; }
+
+/* ── Jets ───────────────────────────────── */
+.jets {
+  display: none; margin-top: 5px;
+  padding: 4px 14px; border-radius: 12px;
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: all 0.3s;
+}
+.jets.vis { display: inline-block; }
+.jets:active { transform: scale(0.93); }
+.jets.active { background: rgba(20,184,166,0.25); border-color: rgba(20,184,166,0.6); color: var(--teal); }
+
+/* ── Lights strip (bottom of pool) ──────── */
+.lights-strip {
+  position: absolute; bottom: 10px; left: 10px; right: 10px;
+  z-index: 5; display: flex; align-items: center; gap: 8px;
+}
+.lights-strip .lt-toggle {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid rgba(255,255,255,0.2);
+  background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; color: rgba(255,255,255,0.3);
+  transition: all 0.3s;
+}
+.lights-strip .lt-toggle:active { transform: scale(0.9); }
+.lights-strip .lt-toggle.on {
+  border-color: var(--gold); background: rgba(234,179,8,0.2);
+  color: var(--gold);
+}
+
+.color-scroll {
+  display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  padding: 4px 2px;
+}
+.color-scroll::-webkit-scrollbar { display: none; }
+
+.cswatch {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid transparent; cursor: pointer;
+  transition: transform 0.2s, border-color 0.3s, box-shadow 0.3s;
   position: relative;
-  overflow: hidden;
 }
-.card::before {
-  content: ''; position: absolute; inset: 0;
-  border-radius: var(--radius);
-  opacity: 0; transition: opacity 0.4s;
-  pointer-events: none;
+.cswatch:active { transform: scale(0.88); }
+.cswatch.on {
+  border-color: white;
+  box-shadow: 0 0 10px rgba(255,255,255,0.3);
+  transform: scale(1.1);
 }
-.card.active { border-color: rgba(255,255,255,0.12); }
+/* Color gradients for each mode */
+.cswatch[data-mode="swim"]      { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
+.cswatch[data-mode="party"]     { background: conic-gradient(#ef4444, #eab308, #22c55e, #3b82f6, #a855f7, #ef4444); }
+.cswatch[data-mode="romantic"]  { background: linear-gradient(135deg, #ec4899, #f59e0b); }
+.cswatch[data-mode="caribbean"] { background: linear-gradient(135deg, #06b6d4, #2dd4bf); }
+.cswatch[data-mode="american"]  { background: linear-gradient(135deg, #ef4444, #eff6ff, #3b82f6); }
+.cswatch[data-mode="sunset"]    { background: linear-gradient(135deg, #f97316, #dc2626); }
+.cswatch[data-mode="royal"]     { background: linear-gradient(135deg, #7c3aed, #3b82f6); }
+.cswatch[data-mode="blue"]      { background: #3b82f6; }
+.cswatch[data-mode="green"]     { background: #22c55e; }
+.cswatch[data-mode="red"]       { background: #ef4444; }
+.cswatch[data-mode="white"]     { background: radial-gradient(circle, #ffffff, #cbd5e1); }
+.cswatch[data-mode="purple"]    { background: #a855f7; }
 
-/* Body cards (pool/spa) */
-.card-body { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 12px; }
-.card-body .left { display: flex; flex-direction: column; gap: 2px; }
-.card-body .right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-
-.card-title {
-  font-size: 13px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 1.5px; color: var(--text-dim);
-  display: flex; align-items: center; gap: 6px;
+/* ── Auxiliaries ─────────────────────────── */
+.auxs { display: flex; gap: 8px; margin: 0 0 8px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.aux {
+  flex: 1; padding: 14px 6px; border-radius: 16px;
+  background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text-dim); font-size: 12px; font-weight: 500;
+  cursor: pointer; text-align: center; transition: all 0.3s;
 }
-.card-title .heat-dot {
-  width: 6px; height: 6px; border-radius: 50%;
-  background: var(--warm); display: none;
-}
-.card-title .heat-dot.on { display: inline-block; animation: pulse 2s infinite; }
+.aux:active { transform: scale(0.96); }
+.aux.on { background: rgba(56,189,248,0.12); border-color: rgba(56,189,248,0.3); color: var(--accent); }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.temp {
-  font-size: 56px; font-weight: 700; color: var(--text-bright);
-  line-height: 1; letter-spacing: -2px;
-  font-variant-numeric: tabular-nums;
-}
-.temp .unit { font-size: 24px; font-weight: 400; color: var(--text-dim); }
-
-.setpoint {
-  font-size: 15px; color: var(--text-dim);
-  cursor: pointer; padding: 4px 0;
+/* ── Settings gear ───────────────────────── */
+.gear-btn {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
   transition: color 0.2s;
 }
-.setpoint:active { color: var(--accent); }
+.gear-btn:active { color: var(--text-bright); }
 
-.toggle {
-  width: 52px; height: 30px; border-radius: 15px;
-  background: rgba(255,255,255,0.1);
-  border: none; cursor: pointer;
-  position: relative; transition: background 0.3s;
-  flex-shrink: 0;
+/* ── Tech drawer ────────────────────────── */
+.tech-drawer {
+  max-height: 0; overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s;
+  margin: 0 16px; padding: 0 14px;
 }
-.toggle::after {
-  content: ''; position: absolute;
-  top: 3px; left: 3px;
-  width: 24px; height: 24px; border-radius: 50%;
-  background: rgba(255,255,255,0.5);
-  transition: transform 0.3s, background 0.3s;
-}
-.toggle.on { background: var(--accent); }
-.toggle.on::after { transform: translateX(22px); background: white; }
-
-/* Spa-specific: accessories row */
-.accessories {
-  display: flex; gap: 8px; margin-top: 12px;
-  padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);
-}
-.acc-btn {
-  display: flex; align-items: center; gap: 6px;
-  padding: 8px 16px; border-radius: 20px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.08);
-  color: var(--text-dim); font-size: 13px; font-weight: 500;
-  cursor: pointer; transition: all 0.3s;
-}
-.acc-btn:active { transform: scale(0.95); }
-.acc-btn.on {
-  background: rgba(20, 184, 166, 0.2);
-  border-color: rgba(20, 184, 166, 0.5);
-  color: #2dd4bf;
-}
-
-/* Pool card glow when active */
-.card.pool-card.active::before {
-  background: linear-gradient(135deg, rgba(56,189,248,0.1), transparent);
-  opacity: 1;
-}
-.card.spa-card.active::before {
-  background: linear-gradient(135deg, rgba(20,184,166,0.12), transparent);
-  opacity: 1;
-}
-
-/* ── Lights card ────────────────────────────────── */
-.card.lights-card .card-body { grid-template-columns: 1fr auto; }
-.color-grid {
-  display: flex; flex-wrap: wrap; gap: 8px;
-  margin-top: 12px; padding-top: 12px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-.color-btn {
-  padding: 8px 14px; border-radius: 16px;
-  background: rgba(255,255,255,0.06);
-  border: 1.5px solid rgba(255,255,255,0.08);
-  color: var(--text-dim); font-size: 12px; font-weight: 500;
-  cursor: pointer; transition: all 0.25s;
-}
-.color-btn:active { transform: scale(0.93); }
-.color-btn.on {
-  background: rgba(250, 204, 21, 0.15);
-  border-color: rgba(250, 204, 21, 0.5);
-  color: #fbbf24;
-}
-.mode-label {
-  font-size: 15px; color: var(--text-dim);
-  text-transform: capitalize;
-}
-
-/* ── Aux row ────────────────────────────────────── */
-.aux-section {
-  padding: 4px 16px 8px;
-  display: flex; gap: 8px; flex-wrap: wrap;
-}
-.aux-pill {
-  flex: 1; min-width: 90px;
-  padding: 14px 12px; border-radius: 16px;
-  background: var(--card);
-  border: 1px solid rgba(255,255,255,0.06);
-  color: var(--text-dim); font-size: 13px; font-weight: 500;
-  cursor: pointer; transition: all 0.3s;
-  text-align: center;
-  backdrop-filter: blur(20px);
-}
-.aux-pill:active { transform: scale(0.96); }
-.aux-pill.on {
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.3);
-  color: var(--accent);
-}
-
-/* ── Pump strip ─────────────────────────────────── */
-.pump-strip {
-  margin: 8px 16px 16px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid rgba(255,255,255,0.04);
+.tech-drawer.open { max-height: 200px; padding: 12px 14px; }
+.tech-drawer .tech-row {
   display: flex; justify-content: space-between;
   font-size: 12px; color: var(--text-dim);
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
 }
-.pump-strip .v { color: var(--text); font-weight: 600; }
-.pump-strip.off { opacity: 0.4; }
+.tech-drawer .tech-row:last-child { border-bottom: none; }
+.tech-drawer .tech-label { color: rgba(255,255,255,0.35); }
+.tech-drawer .tech-val { font-weight: 600; }
 
-/* ── Setpoint modal ─────────────────────────────── */
-.overlay {
+/* ── Bottom sheet ────────────────────────── */
+.ov {
   display: none; position: fixed; inset: 0;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.55);
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   z-index: 100; align-items: flex-end; justify-content: center;
 }
-.overlay.open { display: flex; }
-
-.sheet {
+.ov.open { display: flex; }
+.sh {
   background: #1e293b; width: 100%; max-width: 420px;
-  border-radius: 28px 28px 0 0;
-  padding: 12px 24px calc(24px + env(safe-area-inset-bottom));
+  border-radius: 24px 24px 0 0;
+  padding: 8px 24px calc(20px + env(safe-area-inset-bottom));
   text-align: center;
 }
-.sheet-handle {
-  width: 36px; height: 4px; border-radius: 2px;
-  background: rgba(255,255,255,0.2);
-  margin: 0 auto 20px;
+.sh-bar { width: 36px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.2); margin: 0 auto 20px; }
+.sh h3 { font-size: 16px; font-weight: 600; color: var(--text-bright); margin-bottom: 20px; }
+.sh .sv { font-size: 68px; font-weight: 700; color: var(--text-bright); letter-spacing: -3px; line-height: 1; }
+.sh .su { font-size: 26px; color: var(--text-dim); font-weight: 400; }
+.sh .sbtns { display: flex; justify-content: center; gap: 28px; margin: 20px 0 24px; }
+.sh .sb {
+  width: 56px; height: 56px; border-radius: 50%;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: var(--text-bright); font-size: 26px; font-weight: 300;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
-.sheet h3 { font-size: 17px; font-weight: 600; color: var(--text-bright); margin-bottom: 24px; }
-.sheet .big-temp {
-  font-size: 72px; font-weight: 700; color: var(--text-bright);
-  letter-spacing: -3px; line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-.sheet .big-unit { font-size: 28px; color: var(--text-dim); font-weight: 400; }
-.sheet .temp-btns {
-  display: flex; justify-content: center; gap: 32px;
-  margin: 24px 0 28px;
-}
-.sheet .tbtn {
-  width: 60px; height: 60px; border-radius: 50%;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: var(--text-bright); font-size: 28px; font-weight: 300;
-  cursor: pointer; transition: all 0.15s;
-  display: flex; align-items: center; justify-content: center;
-}
-.sheet .tbtn:active { transform: scale(0.9); background: rgba(255,255,255,0.15); }
-.sheet .actions { display: flex; gap: 12px; }
-.sheet .btn {
-  flex: 1; padding: 16px; border-radius: 14px; border: none;
-  font-size: 16px; font-weight: 600; cursor: pointer;
-}
-.sheet .btn-cancel { background: rgba(255,255,255,0.08); color: var(--text); }
-.sheet .btn-set { background: var(--accent); color: #0f172a; }
-.sheet .btn:active { transform: scale(0.97); }
+.sh .sb:active { transform: scale(0.9); background: rgba(255,255,255,0.15); }
+.sh .sas { display: flex; gap: 10px; }
+.sh .sa { flex: 1; padding: 15px; border-radius: 14px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+.sh .sa:active { transform: scale(0.97); }
+.sh .sa-c { background: rgba(255,255,255,0.08); color: var(--text); }
+.sh .sa-s { background: var(--accent); color: #0f172a; }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <div class="header-left">
-    <div class="dot" id="dot"></div>
-    <h1>Pool</h1>
-  </div>
-  <span class="air-temp" id="air"></span>
+<div class="hdr">
+  <div></div>
+  <button class="gear-btn" onclick="document.getElementById('techDraw').classList.toggle('open')">⚙</button>
 </div>
 
-<div class="cards">
-  <!-- Spa card -->
-  <div class="card spa-card" id="spaCard">
-    <div class="card-body">
-      <div class="left">
-        <div class="card-title">Spa <span class="heat-dot" id="spaHeatDot"></span></div>
-        <div class="temp" id="spaTemp">--<span class="unit">°</span></div>
-        <div class="setpoint" id="spaSet" onclick="openSet('spa')">Set --°</div>
-      </div>
-      <div class="right">
-        <button class="toggle" id="spaToggle" onclick="toggleSpa()"></button>
-      </div>
-    </div>
-    <div class="accessories" id="spaAcc"></div>
-  </div>
-
-  <!-- Pool card -->
-  <div class="card pool-card" id="poolCard">
-    <div class="card-body">
-      <div class="left">
-        <div class="card-title">Pool <span class="heat-dot" id="poolHeatDot"></span></div>
-        <div class="temp" id="poolTemp">--<span class="unit">°</span></div>
-        <div class="setpoint" id="poolSet" onclick="openSet('pool')">Set --°</div>
-      </div>
-      <div class="right">
-        <button class="toggle" id="poolToggle" onclick="togglePool()"></button>
-      </div>
+<div class="deck"><div class="deck-inner">
+  <div class="pool" id="pool">
+    <div class="pool-info">
+            <div class="wtemp" id="pT">--<span class="deg">°</span></div>
+      <div class="wset" id="pS" onclick="openSet('pool')">set --°</div>
+      <div class="wheat" id="pH">Heating</div>
     </div>
   </div>
 
-  <!-- Lights card -->
-  <div class="card lights-card" id="lightsCard">
-    <div class="card-body">
-      <div class="left">
-        <div class="card-title">Lights</div>
-        <div class="mode-label" id="lightMode">Off</div>
-      </div>
-      <div class="right">
-        <button class="toggle" id="lightToggle" onclick="toggleLights()"></button>
-      </div>
+  <div class="spa" id="spa" onclick="toggleSpa()">
+    <button class="spa-tog" id="spaTog" onclick="event.stopPropagation(); toggleSpa()"></button>
+    <div class="spa-info">
+            <div class="wtemp" id="sT">--<span class="deg">°</span></div>
+      <div class="wset" id="sS" onclick="event.stopPropagation(); openSet('spa')">set --°</div>
+      <div class="wheat" id="sH">Heating</div>
+      <button class="jets" id="jets" onclick="event.stopPropagation(); toggleJets()">Jets</button>
     </div>
-    <div class="color-grid" id="colorGrid"></div>
   </div>
+
+  <div class="lights-strip">
+    <button class="lt-toggle" id="ltTog" onclick="toggleLights()">⏻</button>
+    <div class="color-scroll" id="cs"></div>
+  </div>
+</div></div>
+
+<div class="tech-drawer" id="techDraw">
+  <div class="auxs" id="axs"></div>
+  <div class="tech-row" style="margin-top:8px"><span class="tech-label">Status</span><span class="tech-val" id="tdConn">--</span></div>
+  <div class="tech-row"><span class="tech-label">Equipment Pad</span><span class="tech-val" id="tdAir">--</span></div>
+  <div class="tech-row"><span class="tech-label">Controller</span><span class="tech-val" id="tdCtrl">--</span></div>
+  <div class="tech-row"><span class="tech-label">Firmware</span><span class="tech-val" id="tdFw">--</span></div>
+  <div class="tech-row"><span class="tech-label">Pump</span><span class="tech-val" id="tdPump">--</span></div>
+  <div class="tech-row"><span class="tech-label">RPM</span><span class="tech-val" id="tdRpm">—</span></div>
+  <div class="tech-row"><span class="tech-label">Power</span><span class="tech-val" id="tdW">—</span></div>
+  <div class="tech-row"><span class="tech-label">Flow</span><span class="tech-val" id="tdGpm">—</span></div>
 </div>
 
-<div class="aux-section" id="auxSection"></div>
-
-<div class="pump-strip" id="pumpStrip">
-  <span>Pump <span class="v" id="pType">--</span></span>
-  <span><span class="v" id="pRpm">0</span> RPM</span>
-  <span><span class="v" id="pW">0</span>W</span>
-  <span><span class="v" id="pGpm">0</span> GPM</span>
-</div>
-
-<!-- Bottom sheet setpoint picker -->
-<div class="overlay" id="overlay" onclick="if(event.target===this)closeSet()">
-  <div class="sheet">
-    <div class="sheet-handle"></div>
-    <h3 id="sheetTitle">Spa Temperature</h3>
-    <div><span class="big-temp" id="sheetTemp">104</span><span class="big-unit">°</span></div>
-    <div class="temp-btns">
-      <button class="tbtn" onclick="adj(-1)">−</button>
-      <button class="tbtn" onclick="adj(+1)">+</button>
+<div class="ov" id="ov" onclick="if(event.target===this)closeSet()">
+  <div class="sh">
+    <div class="sh-bar"></div>
+    <h3 id="shT">Temperature</h3>
+    <div><span class="sv" id="shV">--</span><span class="su">°</span></div>
+    <div class="sbtns">
+      <button class="sb" onclick="adj(-1)">−</button>
+      <button class="sb" onclick="adj(+1)">+</button>
     </div>
-    <div class="actions">
-      <button class="btn btn-cancel" onclick="closeSet()">Cancel</button>
-      <button class="btn btn-set" onclick="confirmSet()">Set</button>
+    <div class="sas">
+      <button class="sa sa-c" onclick="closeSet()">Cancel</button>
+      <button class="sa sa-s" onclick="confirmSet()">Set</button>
     </div>
   </div>
 </div>
 
 <script>
-const API = '';
-let S = null;        // state
-let setBody = null;  // which body the sheet is editing
-let setVal = 0;
+const MODES = ['swim','party','romantic','caribbean','american','sunset','royal','blue','green','red','white','purple'];
+let S=null,setB=null,setV=0;
 
-async function post(path, body) {
-  const o = { method: 'POST' };
-  if (body) { o.headers = {'Content-Type':'application/json'}; o.body = JSON.stringify(body); }
-  return (await fetch(API + path, o)).json();
-}
+async function post(p,b){const o={method:'POST'};if(b){o.headers={'Content-Type':'application/json'};o.body=JSON.stringify(b);}return(await fetch(p,o)).json();}
+async function refresh(){try{S=await(await fetch('/api/pool')).json();render();}catch{document.getElementById('tdConn').textContent='Disconnected';}}
+function connectWs(){const w=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/ws');w.onmessage=()=>refresh();w.onclose=()=>setTimeout(connectWs,3000);}
 
-async function refresh() {
-  try {
-    S = await (await fetch(API + '/api/pool')).json();
-    render();
-    document.getElementById('dot').classList.remove('off');
-  } catch { document.getElementById('dot').classList.add('off'); }
-}
+function render(){
+  if(!S)return;
+  document.getElementById('tdAir').textContent=S.system.air_temperature+'°F';
+  document.getElementById('tdConn').textContent='Connected';
 
-function connectWs() {
-  const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const ws = new WebSocket(p + '//' + location.host + '/api/ws');
-  ws.onmessage = () => refresh();
-  ws.onclose = () => setTimeout(connectWs, 3000);
-}
-
-function render() {
-  if (!S) return;
-  const u = S.system.temp_unit?.includes('C') ? '°C' : '°F';
-
-  // Air
-  document.getElementById('air').textContent = S.system.air_temperature + u;
-
-  // Spa
-  if (S.spa) {
-    document.getElementById('spaTemp').innerHTML = S.spa.temperature + '<span class="unit">°</span>';
-    document.getElementById('spaSet').textContent = 'Set ' + S.spa.setpoint + '°';
-    const st = document.getElementById('spaToggle');
-    st.classList.toggle('on', S.spa.on);
-    document.getElementById('spaCard').classList.toggle('active', S.spa.on);
-    const hd = document.getElementById('spaHeatDot');
-    hd.classList.toggle('on', S.spa.heating !== 'off');
-
-    // Accessories
-    const acc = document.getElementById('spaAcc');
-    if (S.spa.accessories && Object.keys(S.spa.accessories).length > 0) {
-      acc.style.display = '';
-      if (acc.children.length === 0) {
-        for (const [id, on] of Object.entries(S.spa.accessories)) {
-          const b = document.createElement('button');
-          b.className = 'acc-btn';
-          b.id = 'acc-' + id;
-          b.textContent = id.charAt(0).toUpperCase() + id.slice(1).replace(/_/g, ' ');
-          b.onclick = () => toggleAcc(id);
-          acc.appendChild(b);
-        }
-      }
-      for (const [id, on] of Object.entries(S.spa.accessories)) {
-        const b = document.getElementById('acc-' + id);
-        if (b) b.classList.toggle('on', on);
-      }
-    } else {
-      acc.style.display = 'none';
+  if(S.spa){
+    document.getElementById('sT').innerHTML=S.spa.temperature+'<span class="deg">°</span>';
+    document.getElementById('sS').textContent='set '+S.spa.setpoint+'°';
+    document.getElementById('spa').classList.toggle('on',S.spa.on);
+    document.getElementById('spaTog').classList.toggle('on',S.spa.on);
+    document.getElementById('sH').classList.toggle('on',S.spa.heating!=='off');
+    const j=document.getElementById('jets');
+    const hj=S.spa.accessories&&S.spa.accessories.jets!==undefined;
+    j.classList.toggle('vis',hj);
+    if(hj)j.classList.toggle('active',S.spa.accessories.jets);
+  }
+  if(S.pool){
+    document.getElementById('pT').innerHTML=S.pool.temperature+'<span class="deg">°</span>';
+    document.getElementById('pS').textContent='set '+S.pool.setpoint+'°';
+    document.getElementById('pool').classList.toggle('on',S.pool.on);
+    document.getElementById('pH').classList.toggle('on',S.pool.heating!=='off');
+  }
+  if(S.lights){
+    document.getElementById('ltTog').classList.toggle('on',S.lights.on);
+    // Build color swatches once
+    const cs=document.getElementById('cs');
+    if(!cs.children.length){
+      MODES.forEach(m=>{
+        const d=document.createElement('div');
+        d.className='cswatch'; d.dataset.mode=m;
+        d.title=m.charAt(0).toUpperCase()+m.slice(1);
+        d.onclick=()=>setMode(m);
+        cs.appendChild(d);
+      });
     }
+    cs.querySelectorAll('.cswatch').forEach(d=>d.classList.toggle('on',d.dataset.mode===S.lights.mode));
   }
 
-  // Pool
-  if (S.pool) {
-    document.getElementById('poolTemp').innerHTML = S.pool.temperature + '<span class="unit">°</span>';
-    document.getElementById('poolSet').textContent = 'Set ' + S.pool.setpoint + '°';
-    document.getElementById('poolToggle').classList.toggle('on', S.pool.on);
-    document.getElementById('poolCard').classList.toggle('active', S.pool.on);
-    document.getElementById('poolHeatDot').classList.toggle('on', S.pool.heating !== 'off');
-  }
-
-  // Lights
-  if (S.lights) {
-    document.getElementById('lightToggle').classList.toggle('on', S.lights.on);
-    document.getElementById('lightsCard').classList.toggle('active', S.lights.on);
-    const ml = document.getElementById('lightMode');
-    ml.textContent = S.lights.on ? (S.lights.mode || 'On') : 'Off';
-    ml.style.textTransform = 'capitalize';
-
-    const grid = document.getElementById('colorGrid');
-    if (grid.children.length === 0 && S.lights.available_modes) {
-      for (const m of S.lights.available_modes.filter(m => !['off','on','set','sync','save','recall'].includes(m))) {
-        const b = document.createElement('button');
-        b.className = 'color-btn';
-        b.dataset.mode = m;
-        b.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-        b.onclick = () => setMode(m);
-        grid.appendChild(b);
-      }
-    }
-    grid.querySelectorAll('.color-btn').forEach(b => {
-      b.classList.toggle('on', b.dataset.mode === S.lights.mode);
+  const ax=document.getElementById('axs');
+  if(S.auxiliaries){
+    if(!ax.children.length)S.auxiliaries.forEach(a=>{
+      const b=document.createElement('button');b.className='aux';b.id='ax-'+a.id;
+      b.textContent=a.name;b.onclick=()=>toggleAux(a.id);ax.appendChild(b);
     });
+    S.auxiliaries.forEach(a=>{const b=document.getElementById('ax-'+a.id);if(b)b.classList.toggle('on',a.on);});
   }
-
-  // Aux
-  const sec = document.getElementById('auxSection');
-  if (S.auxiliaries) {
-    if (sec.children.length === 0) {
-      for (const a of S.auxiliaries) {
-        const b = document.createElement('button');
-        b.className = 'aux-pill';
-        b.id = 'aux-' + a.id;
-        b.textContent = a.name;
-        b.onclick = () => toggleAux(a.id);
-        sec.appendChild(b);
-      }
-    }
-    for (const a of S.auxiliaries) {
-      const b = document.getElementById('aux-' + a.id);
-      if (b) b.classList.toggle('on', a.on);
-    }
+  if(S.system){
+    document.getElementById('tdCtrl').textContent=S.system.controller||'--';
+    document.getElementById('tdFw').textContent=S.system.firmware||'--';
   }
-
-  // Pump
-  if (S.pump) {
-    const strip = document.getElementById('pumpStrip');
-    strip.classList.toggle('off', !S.pump.running);
-    document.getElementById('pType').textContent = S.pump.pump_type;
-    document.getElementById('pRpm').textContent = S.pump.running ? S.pump.rpm : '—';
-    document.getElementById('pW').textContent = S.pump.running ? S.pump.watts : '—';
-    document.getElementById('pGpm').textContent = S.pump.running ? S.pump.gpm : '—';
+  if(S.pump){
+    document.getElementById('tdPump').textContent=S.pump.pump_type+(S.pump.running?' (running)':' (off)');
+    document.getElementById('tdRpm').textContent=S.pump.running?S.pump.rpm+' RPM':'—';
+    document.getElementById('tdW').textContent=S.pump.running?S.pump.watts+'W':'—';
+    document.getElementById('tdGpm').textContent=S.pump.running?S.pump.gpm+' GPM':'—';
   }
 }
 
-// ── Actions ─────────────────────────────────────────
-async function toggleSpa() {
-  if (!S?.spa) return;
-  await post(S.spa.on ? '/api/spa/off' : '/api/spa/on');
-  setTimeout(refresh, 1500);
-}
-async function togglePool() {
-  if (!S?.pool) return;
-  await post(S.pool.on ? '/api/pool/off' : '/api/pool/on');
-  setTimeout(refresh, 1500);
-}
-async function toggleLights() {
-  if (!S?.lights) return;
-  await post(S.lights.on ? '/api/lights/off' : '/api/lights/on');
-  setTimeout(refresh, 500);
-}
-async function setMode(m) {
-  await post('/api/lights/mode', { mode: m });
-  if (!S.lights.on) await post('/api/lights/on');
-  setTimeout(refresh, 500);
-}
-async function toggleAcc(id) {
-  const on = S.spa?.accessories?.[id];
-  await post('/api/spa/' + id + '/' + (on ? 'off' : 'on'));
-  setTimeout(refresh, 1500);
-}
-async function toggleAux(id) {
-  const a = S.auxiliaries.find(x => x.id === id);
-  if (!a) return;
-  await post('/api/auxiliary/' + id + '/' + (a.on ? 'off' : 'on'));
-  setTimeout(refresh, 1000);
-}
+async function toggleSpa(){if(!S?.spa)return;await post(S.spa.on?'/api/spa/off':'/api/spa/on');setTimeout(refresh,1500);}
+async function toggleLights(){if(!S?.lights)return;await post(S.lights.on?'/api/lights/off':'/api/lights/on');setTimeout(refresh,500);}
+async function toggleJets(){if(!S?.spa?.accessories)return;const on=S.spa.accessories.jets;await post('/api/spa/jets/'+(on?'off':'on'));setTimeout(refresh,1500);}
+async function setMode(m){await post('/api/lights/mode',{mode:m});if(!S.lights.on)await post('/api/lights/on');setTimeout(refresh,500);}
+async function toggleAux(id){const a=S.auxiliaries.find(x=>x.id===id);if(!a)return;await post('/api/auxiliary/'+id+'/'+(a.on?'off':'on'));setTimeout(refresh,1000);}
 
-// ── Setpoint sheet ──────────────────────────────────
-function openSet(body) {
-  setBody = body;
-  const d = body === 'pool' ? S.pool : S.spa;
-  if (!d) return;
-  setVal = d.setpoint;
-  document.getElementById('sheetTitle').textContent = (body === 'pool' ? 'Pool' : 'Spa') + ' Temperature';
-  document.getElementById('sheetTemp').textContent = setVal;
-  document.getElementById('overlay').classList.add('open');
-}
-function closeSet() { document.getElementById('overlay').classList.remove('open'); setBody = null; }
-function adj(d) {
-  setVal = Math.max(40, Math.min(104, setVal + d));
-  document.getElementById('sheetTemp').textContent = setVal;
-}
-async function confirmSet() {
-  if (!setBody) return;
-  await post('/api/' + setBody + '/heat', { setpoint: setVal });
-  closeSet();
-  setTimeout(refresh, 2000);
-}
+function openSet(b){setB=b;const d=b==='pool'?S.pool:S.spa;if(!d)return;setV=d.setpoint;
+  document.getElementById('shT').textContent=(b==='pool'?'Pool':'Spa')+' Temperature';
+  document.getElementById('shV').textContent=setV;document.getElementById('ov').classList.add('open');}
+function closeSet(){document.getElementById('ov').classList.remove('open');setB=null;}
+function adj(d){setV=Math.max(40,Math.min(104,setV+d));document.getElementById('shV').textContent=setV;}
+async function confirmSet(){if(!setB)return;await post('/api/'+setB+'/heat',{setpoint:setV});closeSet();setTimeout(refresh,2000);}
 
-// ── Init ────────────────────────────────────────────
-refresh();
-connectWs();
-setInterval(refresh, 15000);
+refresh();connectWs();setInterval(refresh,15000);
 </script>
 </body>
 </html>
