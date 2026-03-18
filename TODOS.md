@@ -1,13 +1,10 @@
 # TODOs
 
-## P1 — Blocks Phase 2
+## Completed
 
-### Document daemon REST API contract
-**What:** Formal API spec document for pentair-daemon — every endpoint, request/response JSON shapes, WebSocket event format.
-**Why:** Unblocks parallel work on Android app + Google Home integration. Prevents API rework.
-**Context:** The semantic API (`GET /api/pool`, `POST /api/spa/on`, etc.) is implemented and working. Needs a formal spec document for external consumers.
-**Effort:** S (CC: ~15 min)
-**Depends on:** Semantic API (done).
+### Define daemon REST API contract
+**Completed:** v0.1.0 (2026-03-18)
+**Spec:** `docs/api-spec.md`
 
 ## P3 — Deferred features
 
