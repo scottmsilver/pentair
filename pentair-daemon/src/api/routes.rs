@@ -1,6 +1,8 @@
 use axum::{
     extract::State,
     extract::Path,
+    http::{header, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -8,6 +10,8 @@ use crate::adapter::{AdapterCommand, PushEvent};
 use crate::state::SharedState;
 use tokio::sync::{broadcast, mpsc};
 use serde::Deserialize;
+
+const INDEX_HTML: &str = include_str!("../../static/index.html");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +28,8 @@ pub fn router(
     let state = AppState { shared, cmd_tx, push_tx };
 
     Router::new()
+        // ── Web UI ─────────────────────────────────────────────────
+        .route("/", get(serve_ui))
         // ── Semantic API (primary — use these) ──────────────────────
         .route("/api/pool", get(get_pool))
         .route("/api/pool/on", post(pool_on))
@@ -56,6 +62,12 @@ pub fn router(
         .route("/api/refresh", post(refresh))
         .route("/api/ws", get(super::websocket::ws_handler))
         .with_state(state)
+}
+
+// ── Web UI ──────────────────────────────────────────────────────────────
+
+async fn serve_ui() -> impl IntoResponse {
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], INDEX_HTML)
 }
 
 // GET endpoints - serve from cache
