@@ -1,3 +1,9 @@
 /target
+Cargo.lock
 *.log
 .env
+*.swp
+*.swo
+*~
+.DS_Store
+.gstack/
