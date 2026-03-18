@@ -48,11 +48,12 @@ body {
 
 /* ── Deck ───────────────────────────────── */
 .deck {
-  margin: 0 16px; padding: 12px; border-radius: 24px;
+  margin: 0 auto; padding: 3px; border-radius: 12px;
+  width: 65%; max-width: 260px;
   background: linear-gradient(135deg, var(--deck-light) 0%, var(--deck) 30%, var(--deck-light) 60%, var(--deck) 100%);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4);
 }
-.deck-inner { position: relative; width: 75%; aspect-ratio: 2/3; margin: 0 auto; }
+.deck-inner { position: relative; width: 100%; aspect-ratio: 4/5; }
 
 /* ── Pool ───────────────────────────────── */
 .pool {
@@ -71,12 +72,12 @@ body {
 
 /* ── Spa ────────────────────────────────── */
 .spa {
-  position: absolute; top: 0; left: 0;
+  position: absolute; top: 0; right: 0;
   width: 42%; height: 55%; border-radius: 16px;
   background: var(--water-off); cursor: pointer;
   transition: all 0.6s; overflow: hidden; z-index: 2;
   box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3), inset 0 2px 4px rgba(0,0,0,0.2);
-  outline: 10px solid var(--deck);
+  outline: 5px solid var(--deck);
 }
 .spa.on { background: linear-gradient(160deg, var(--spa-teal) 0%, var(--spa-teal-light) 70%, var(--spa-teal) 100%); }
 .spa.on::before {
@@ -95,15 +96,15 @@ body {
 }
 
 /* ── Info overlays ──────────────────────── */
-.pool-info { position: absolute; bottom: 60px; right: 20px; text-align: right; z-index: 1; }
+.pool-info { position: absolute; bottom: 60px; left: 16px; z-index: 1; }
 .spa-info { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; z-index: 3; width: 85%; }
 
 .wlabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-faint); }
 .on .wlabel { color: rgba(255,255,255,0.55); }
-.wtemp { font-size: 46px; font-weight: 700; color: rgba(255,255,255,0.5); line-height: 1; letter-spacing: -2px; transition: color 0.5s; }
+.wtemp { font-size: 32px; font-weight: 700; color: rgba(255,255,255,0.5); line-height: 1; letter-spacing: -2px; transition: color 0.5s; }
 .on .wtemp { color: var(--text-bright); text-shadow: 0 2px 20px rgba(0,0,0,0.3); }
-.wtemp .deg { font-size: 20px; font-weight: 400; opacity: 0.5; }
-.wset { font-size: 13px; color: var(--text-faint); margin-top: 2px; cursor: pointer; }
+.wtemp .deg { font-size: 14px; font-weight: 400; opacity: 0.5; }
+.wset { font-size: 11px; color: var(--text-faint); margin-top: 2px; cursor: pointer; }
 .on .wset { color: rgba(255,255,255,0.5); }
 .wset:active { color: var(--accent) !important; }
 .wheat { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; color: var(--warm); opacity: 0; transition: opacity 0.3s; }
@@ -111,23 +112,23 @@ body {
 
 /* ── Spa toggle ─────────────────────────── */
 .spa-tog {
-  position: absolute; top: 8px; right: 8px; z-index: 5;
-  width: 42px; height: 25px; border-radius: 13px;
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  width: 34px; height: 20px; border-radius: 13px;
   background: rgba(255,255,255,0.12); border: none; cursor: pointer; transition: background 0.3s;
 }
 .spa-tog::after {
   content: ''; position: absolute; top: 2px; left: 2px;
-  width: 21px; height: 21px; border-radius: 50%;
+  width: 16px; height: 16px; border-radius: 50%;
   background: rgba(255,255,255,0.45);
   transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), background 0.3s;
 }
 .spa-tog.on { background: var(--teal); }
-.spa-tog.on::after { transform: translateX(17px); background: white; }
+.spa-tog.on::after { transform: translateX(14px); background: white; }
 
 /* ── Jets ───────────────────────────────── */
 .jets {
-  display: none; margin-top: 5px;
-  padding: 4px 14px; border-radius: 12px;
+  display: none; margin-top: 4px;
+  padding: 3px 10px; border-radius: 10px;
   background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.15);
   color: rgba(255,255,255,0.5); font-size: 12px; font-weight: 500;
   cursor: pointer; transition: all 0.3s;
@@ -136,43 +137,61 @@ body {
 .jets:active { transform: scale(0.93); }
 .jets.active { background: rgba(20,184,166,0.25); border-color: rgba(20,184,166,0.6); color: var(--teal); }
 
-/* ── Lights strip (bottom of pool) ──────── */
-.lights-strip {
-  position: absolute; bottom: 10px; left: 10px; right: 10px;
-  z-index: 5; display: flex; align-items: center; gap: 8px;
-}
-.lights-strip .lt-toggle {
-  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
-  border: 2px solid rgba(255,255,255,0.2);
-  background: transparent; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 13px; color: rgba(255,255,255,0.3);
-  transition: all 0.3s;
-}
-.lights-strip .lt-toggle:active { transform: scale(0.9); }
-.lights-strip .lt-toggle.on {
-  border-color: var(--gold); background: rgba(234,179,8,0.2);
-  color: var(--gold);
+/* ── Lights picker (bottom of pool) ─────── */
+.lights-area {
+  position: absolute; bottom: 8px; left: 8px;
+  z-index: 5; display: flex; align-items: center; gap: 5px;
 }
 
-.color-scroll {
-  display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden;
-  -webkit-overflow-scrolling: touch; scrollbar-width: none;
-  padding: 4px 2px;
-}
-.color-scroll::-webkit-scrollbar { display: none; }
-
-.cswatch {
-  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
-  border: 2px solid transparent; cursor: pointer;
-  transition: transform 0.2s, border-color 0.3s, box-shadow 0.3s;
+.lights-selected {
+  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid rgba(255,255,255,0.3);
+  cursor: pointer; transition: all 0.3s;
   position: relative;
 }
-.cswatch:active { transform: scale(0.88); }
+.lights-selected:active { transform: scale(0.9); }
+.lights-selected.on { border-color: rgba(255,255,255,0.6); }
+/* "Off" state: circle with diagonal line */
+.lights-selected.off-state {
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+}
+.lights-selected.off-state::after {
+  content: ''; position: absolute;
+  top: 50%; left: -2px; right: -2px;
+  height: 2px; background: rgba(255,255,255,0.4);
+  transform: rotate(-45deg);
+}
+
+.color-tray {
+  display: flex; gap: 4px;
+  max-width: 0; overflow: hidden;
+  transition: max-width 0.3s ease, opacity 0.3s;
+  opacity: 0;
+}
+.color-tray.open { max-width: 300px; opacity: 1; }
+
+.cswatch {
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid transparent; cursor: pointer;
+  transition: transform 0.2s, border-color 0.3s;
+}
+.cswatch:active { transform: scale(0.85); }
 .cswatch.on {
   border-color: white;
-  box-shadow: 0 0 10px rgba(255,255,255,0.3);
-  transform: scale(1.1);
+  box-shadow: 0 0 6px rgba(255,255,255,0.3);
+}
+
+/* Off swatch in tray */
+.cswatch.off-swatch {
+  background: rgba(255,255,255,0.08);
+  position: relative; overflow: hidden;
+}
+.cswatch.off-swatch::after {
+  content: ''; position: absolute;
+  top: 50%; left: -2px; right: -2px;
+  height: 2px; background: rgba(255,255,255,0.4);
+  transform: rotate(-45deg);
 }
 /* Color gradients for each mode */
 .cswatch[data-mode="swim"]      { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
@@ -285,9 +304,9 @@ body {
     </div>
   </div>
 
-  <div class="lights-strip">
-    <button class="lt-toggle" id="ltTog" onclick="toggleLights()">⏻</button>
-    <div class="color-scroll" id="cs"></div>
+  <div class="lights-area">
+    <div class="lights-selected off-state" id="litSel" onclick="toggleTray()"></div>
+    <div class="color-tray" id="litTray"></div>
   </div>
 </div></div>
 
@@ -350,19 +369,36 @@ function render(){
     document.getElementById('pH').classList.toggle('on',S.pool.heating!=='off');
   }
   if(S.lights){
-    document.getElementById('ltTog').classList.toggle('on',S.lights.on);
-    // Build color swatches once
-    const cs=document.getElementById('cs');
-    if(!cs.children.length){
+    const sel=document.getElementById('litSel');
+    const isOn=S.lights.on;
+    const mode=S.lights.mode;
+    // Update the selected circle to show current mode color
+    sel.className='lights-selected'+(isOn?' on':'');
+    if(!isOn||!mode){
+      sel.classList.add('off-state');
+      sel.style.background='';
+    } else {
+      sel.dataset.mode=mode;
+      // Copy the gradient from CSS by setting the mode attribute
+      sel.style.background=getModeColor(mode);
+    }
+    // Build tray swatches once
+    const tray=document.getElementById('litTray');
+    if(!tray.children.length){
+      // Off swatch first
+      const off=document.createElement('div');
+      off.className='cswatch off-swatch';
+      off.onclick=()=>{setMode('off');closeTray();};
+      tray.appendChild(off);
       MODES.forEach(m=>{
         const d=document.createElement('div');
         d.className='cswatch'; d.dataset.mode=m;
-        d.title=m.charAt(0).toUpperCase()+m.slice(1);
-        d.onclick=()=>setMode(m);
-        cs.appendChild(d);
+        d.style.background=getModeColor(m);
+        d.onclick=()=>{setMode(m);closeTray();};
+        tray.appendChild(d);
       });
     }
-    cs.querySelectorAll('.cswatch').forEach(d=>d.classList.toggle('on',d.dataset.mode===S.lights.mode));
+    tray.querySelectorAll('.cswatch[data-mode]').forEach(d=>d.classList.toggle('on',d.dataset.mode===mode));
   }
 
   const ax=document.getElementById('axs');
@@ -385,10 +421,16 @@ function render(){
   }
 }
 
+function getModeColor(m){
+  const c={swim:'linear-gradient(135deg,#0ea5e9,#14b8a6)',party:'conic-gradient(#ef4444,#eab308,#22c55e,#3b82f6,#a855f7,#ef4444)',romantic:'linear-gradient(135deg,#ec4899,#f59e0b)',caribbean:'linear-gradient(135deg,#06b6d4,#2dd4bf)',american:'linear-gradient(135deg,#ef4444,#eff6ff,#3b82f6)',sunset:'linear-gradient(135deg,#f97316,#dc2626)',royal:'linear-gradient(135deg,#7c3aed,#3b82f6)',blue:'#3b82f6',green:'#22c55e',red:'#ef4444',white:'radial-gradient(circle,#fff,#cbd5e1)',purple:'#a855f7'};
+  return c[m]||'rgba(255,255,255,0.1)';
+}
+function toggleTray(){document.getElementById('litTray').classList.toggle('open');}
+function closeTray(){document.getElementById('litTray').classList.remove('open');}
+
 async function toggleSpa(){if(!S?.spa)return;await post(S.spa.on?'/api/spa/off':'/api/spa/on');setTimeout(refresh,1500);}
-async function toggleLights(){if(!S?.lights)return;await post(S.lights.on?'/api/lights/off':'/api/lights/on');setTimeout(refresh,500);}
 async function toggleJets(){if(!S?.spa?.accessories)return;const on=S.spa.accessories.jets;await post('/api/spa/jets/'+(on?'off':'on'));setTimeout(refresh,1500);}
-async function setMode(m){await post('/api/lights/mode',{mode:m});if(!S.lights.on)await post('/api/lights/on');setTimeout(refresh,500);}
+async function setMode(m){if(m==='off'){await post('/api/lights/off');}else{await post('/api/lights/mode',{mode:m});if(!S.lights.on)await post('/api/lights/on');}setTimeout(refresh,500);}
 async function toggleAux(id){const a=S.auxiliaries.find(x=>x.id===id);if(!a)return;await post('/api/auxiliary/'+id+'/'+(a.on?'off':'on'));setTimeout(refresh,1000);}
 
 function openSet(b){setB=b;const d=b==='pool'?S.pool:S.spa;if(!d)return;setV=d.setpoint;
