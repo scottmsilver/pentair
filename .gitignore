@@ -7,3 +7,9 @@ Cargo.lock
 *~
 .DS_Store
 .gstack/
+
+# Android
+pentair-android/.gradle/
+pentair-android/build/
+pentair-android/app/build/
+pentair-android/local.properties
