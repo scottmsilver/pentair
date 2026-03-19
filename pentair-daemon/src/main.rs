@@ -40,6 +40,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     info!("listening on {}", config.bind);
 
+    // Advertise via mDNS for app discovery
+    let mdns = mdns_sd::ServiceDaemon::new().expect("failed to start mDNS");
+    let hostname = hostname::get()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let bind_port = listener.local_addr()?.port();
+    let service_info = mdns_sd::ServiceInfo::new(
+        "_pentair._tcp.local.",
+        "Pentair Pool",
+        &format!("{}.local.", hostname),
+        "",
+        bind_port,
+        None,
+    )
+    .expect("failed to create mDNS service");
+    mdns.register(service_info)
+        .expect("failed to register mDNS service");
+    info!("mDNS: advertising _pentair._tcp on port {}", bind_port);
+
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
