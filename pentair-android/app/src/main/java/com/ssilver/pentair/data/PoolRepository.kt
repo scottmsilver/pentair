@@ -45,10 +45,13 @@ class PoolRepository @Inject constructor(
     suspend fun connect() {
         _connectionState.value = ConnectionState.DISCOVERING
         val addr = discovery.discover() ?: discovery.cachedAddress()
+        android.util.Log.d("PoolRepo", "Discovery result: $addr")
         if (addr == null) {
+            android.util.Log.e("PoolRepo", "No daemon found — discovery returned null")
             _connectionState.value = ConnectionState.DISCONNECTED
             return
         }
+        android.util.Log.d("PoolRepo", "Connecting to daemon at $addr")
         baseUrl = addr
         val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
         api = Retrofit.Builder()
@@ -64,10 +67,14 @@ class PoolRepository @Inject constructor(
 
     suspend fun refresh() {
         try {
-            _state.value = api?.getPool()
+            android.util.Log.d("PoolRepo", "Refreshing from ${baseUrl}/api/pool")
+            val result = api?.getPool()
+            android.util.Log.d("PoolRepo", "Got pool data: pool=${result?.pool?.temperature}°F spa=${result?.spa?.temperature}°F")
+            _state.value = result
             _connectionState.value = ConnectionState.CONNECTED
-            reconnectDelay = 1000L // Reset on success
+            reconnectDelay = 1000L
         } catch (e: Exception) {
+            android.util.Log.e("PoolRepo", "Refresh failed: ${e.message}", e)
             _connectionState.value = ConnectionState.DISCONNECTED
         }
     }
