@@ -3,6 +3,7 @@ mod state;
 mod adapter;
 mod api;
 mod devices;
+mod fcm;
 
 use std::path::PathBuf;
 use tracing::info;
@@ -28,20 +29,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
     let (push_tx, _push_rx) = tokio::sync::broadcast::channel(64);
 
-    // Start adapter task
-    let adapter_state = state.clone();
-    let adapter_host = config.adapter_host.clone();
-    let push_tx_adapter = push_tx.clone();
-    tokio::spawn(async move {
-        adapter::run_adapter(adapter_host, adapter_state, cmd_rx, push_tx_adapter).await;
-    });
-
     // Load device token store
     let devices_path = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".pentair")
         .join("devices.json");
     let devices = devices::DeviceManager::load(devices_path);
+
+    // Create FCM sender (None if not configured)
+    let fcm_sender = fcm::FcmSender::new(
+        config.fcm.project_id.clone(),
+        &config.fcm.service_account,
+        devices.clone(),
+    ).map(std::sync::Arc::new);
+
+    // Start adapter task
+    let adapter_state = state.clone();
+    let adapter_host = config.adapter_host.clone();
+    let push_tx_adapter = push_tx.clone();
+    tokio::spawn(async move {
+        adapter::run_adapter(adapter_host, adapter_state, cmd_rx, push_tx_adapter, fcm_sender).await;
+    });
 
     // Start HTTP server
     let router = api::create_router(state, cmd_tx, push_tx, devices);

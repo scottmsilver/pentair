@@ -19,6 +19,17 @@ pub struct Config {
     /// ```
     #[serde(default)]
     pub associations: Associations,
+
+    #[serde(default)]
+    pub fcm: FcmConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FcmConfig {
+    #[serde(default)]
+    pub service_account: String,
+    #[serde(default)]
+    pub project_id: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -48,6 +59,7 @@ impl Default for Config {
             adapter_host: default_adapter_host(),
             bind: default_bind(),
             associations: Default::default(),
+            fcm: Default::default(),
         }
     }
 }

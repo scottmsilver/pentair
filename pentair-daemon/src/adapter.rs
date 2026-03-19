@@ -1,9 +1,12 @@
+use crate::fcm::FcmSender;
 use crate::state::SharedState;
 use pentair_client::client::Client;
 use pentair_client::discovery::discover;
+use pentair_protocol::semantic::PoolSystem;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info};
-use std::time::Duration;
 
 /// Commands sent from the API to the adapter task
 pub enum AdapterCommand {
@@ -31,6 +34,7 @@ pub async fn run_adapter(
     state: SharedState,
     mut cmd_rx: mpsc::Receiver<AdapterCommand>,
     push_tx: broadcast::Sender<PushEvent>,
+    fcm: Option<Arc<FcmSender>>,
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(60);
@@ -67,6 +71,8 @@ pub async fn run_adapter(
                 refresh_all(&mut client, &state).await;
                 let _ = push_tx.send(PushEvent::StatusChanged);
 
+                let mut previous_system: Option<PoolSystem> = state.read().await.pool_system();
+
                 // Main loop: handle commands and periodic refresh
                 let mut refresh_interval = tokio::time::interval(Duration::from_secs(30));
                 let mut ping_interval = tokio::time::interval(Duration::from_secs(60));
@@ -79,6 +85,10 @@ pub async fn run_adapter(
                                 error!("adapter connection lost during command");
                                 break;
                             }
+                            // Check for transitions after commands too
+                            let current = state.read().await.pool_system();
+                            detect_transitions(&previous_system, &current, &fcm).await;
+                            previous_system = current;
                         }
                         _ = refresh_interval.tick() => {
                             if let Err(e) = refresh_status(&mut client, &state).await {
@@ -86,6 +96,9 @@ pub async fn run_adapter(
                                 break;
                             }
                             let _ = push_tx.send(PushEvent::StatusChanged);
+                            let current = state.read().await.pool_system();
+                            detect_transitions(&previous_system, &current, &fcm).await;
+                            previous_system = current;
                         }
                         _ = ping_interval.tick() => {
                             if let Err(e) = client.ping().await {
@@ -94,6 +107,11 @@ pub async fn run_adapter(
                             }
                         }
                     }
+                }
+
+                // Connection lost — notify
+                if let Some(ref sender) = fcm {
+                    sender.send("Connection Lost", "Lost connection to pool adapter").await;
                 }
 
                 // Try graceful disconnect
@@ -226,4 +244,65 @@ async fn refresh_status(client: &mut Client, state: &SharedState) -> Result<(), 
     let status = client.get_status().await?;
     state.write().await.status = Some(status);
     Ok(())
+}
+
+// ─── FCM event detection ────────────────────────────────────────────────
+
+fn spa_is_ready(system: &PoolSystem) -> bool {
+    system.spa.as_ref().map_or(false, |spa| {
+        spa.on && spa.temperature >= spa.setpoint
+    })
+}
+
+async fn detect_transitions(
+    previous: &Option<PoolSystem>,
+    current: &Option<PoolSystem>,
+    fcm: &Option<Arc<FcmSender>>,
+) {
+    let sender = match fcm {
+        Some(s) => s,
+        None => return,
+    };
+    let (prev, curr) = match (previous, current) {
+        (Some(p), Some(c)) => (p, c),
+        _ => return,
+    };
+
+    // Spa ready: spa on + temp >= setpoint, transitioning from not-ready to ready
+    if spa_is_ready(curr) && !spa_is_ready(prev) {
+        if let Some(ref spa) = curr.spa {
+            sender.send(
+                "Spa Ready",
+                &format!("Spa has reached {}{}.", spa.temperature, curr.system.temp_unit),
+            ).await;
+        }
+    }
+
+    // Freeze protection activated
+    if curr.system.freeze_protection && !prev.system.freeze_protection {
+        sender.send(
+            "Freeze Protection",
+            "Freeze protection has been activated.",
+        ).await;
+    }
+
+    // Heater started (spa)
+    if let (Some(prev_spa), Some(curr_spa)) = (&prev.spa, &curr.spa) {
+        if prev_spa.heating == "off" && curr_spa.heating != "off" {
+            sender.send(
+                "Spa Heater Started",
+                &format!("Spa heater is now active ({}).", curr_spa.heating),
+            ).await;
+        }
+    }
+
+    // Heater started (pool)
+    if let (Some(prev_pool), Some(curr_pool)) = (&prev.pool, &curr.pool) {
+        if prev_pool.heating == "off" && curr_pool.heating != "off" {
+            sender.send(
+                "Pool Heater Started",
+                &format!("Pool heater is now active ({}).", curr_pool.heating),
+            ).await;
+        }
+    }
 }
