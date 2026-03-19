@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ssilver.pentair.data.PoolRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -14,6 +15,7 @@ class PoolViewModel @Inject constructor(
 
     val state = repository.state
     val connectionState = repository.connectionState
+    val rejections: SharedFlow<String> = repository.rejections
 
     init {
         viewModelScope.launch { repository.connect() }

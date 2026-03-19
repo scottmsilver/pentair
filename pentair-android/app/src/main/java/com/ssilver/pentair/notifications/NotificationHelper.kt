@@ -8,6 +8,7 @@ import androidx.core.app.NotificationCompat
 object NotificationHelper {
     private const val CHANNEL_ID = "pool_alerts"
     private const val CHANNEL_NAME = "Pool Alerts"
+    @Volatile
     private var channelCreated = false
 
     fun show(context: Context, title: String, body: String) {
