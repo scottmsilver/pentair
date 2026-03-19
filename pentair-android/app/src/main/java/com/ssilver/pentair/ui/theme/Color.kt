@@ -3,8 +3,8 @@ package com.ssilver.pentair.ui.theme
 import androidx.compose.ui.graphics.Color
 
 val PoolBackground = Color(0xFF0C1222)
-val DeckGray = Color(0xFF2A3040)
-val DeckGrayLight = Color(0xFF353D4F)
+val DeckGray = Color(0xFF3A4255)
+val DeckGrayLight = Color(0xFF4A5268)
 val WaterOff = Color(0xFF162030)
 val PoolBlue = Color(0xFF0A5A8C)
 val PoolBlueLight = Color(0xFF1080B8)

@@ -74,11 +74,12 @@ fun PoolVisualCanvas(
 
     val deckShape = RoundedCornerShape(14.dp)
     val waterShape = RoundedCornerShape(16.dp)
+    val spaShape = RoundedCornerShape(16.dp)
 
-    // Deck container
+    // Deck container — matches web UI: 3px padding, 14px border-radius
     Box(
         modifier = modifier
-            .fillMaxWidth(0.65f)
+            .fillMaxWidth()
             .aspectRatio(4f / 5f)
             .clip(deckShape)
             .background(
@@ -90,7 +91,7 @@ fun PoolVisualCanvas(
             )
             .padding(3.dp),
     ) {
-        // Pool water
+        // Pool water — fills entire deck interior
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -132,24 +133,24 @@ fun PoolVisualCanvas(
                     shape = waterShape,
                 ),
         ) {
-            // Pool temperature info - bottom left
+            // Pool temperature — bottom left
             if (pool != null) {
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(start = 16.dp, bottom = 60.dp),
+                        .padding(start = 20.dp, bottom = 56.dp),
                 ) {
                     Text(
                         text = "${pool.temperature}\u00B0",
-                        fontSize = 32.sp,
+                        fontSize = 40.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (poolOn) TextBright else TextBright.copy(alpha = 0.5f),
                         letterSpacing = (-2).sp,
-                        lineHeight = 32.sp,
+                        lineHeight = 40.sp,
                     )
                     Text(
                         text = "set ${pool.setpoint}\u00B0",
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         color = if (poolOn) Color.White.copy(alpha = 0.5f) else TextFaint,
                         modifier = Modifier.clickable(
                             interactionSource = remember { MutableInteractionSource() },
@@ -169,19 +170,18 @@ fun PoolVisualCanvas(
                 }
             }
 
-            // Spa area - top right
+            // Spa area — upper right, 42% width, 55% height (matches web UI)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .fillMaxWidth(0.42f)
                     .fillMaxHeight(0.55f)
-                    .padding(0.dp) // The outline gap comes from the border below
                     .border(
                         width = 5.dp,
                         color = DeckGray,
-                        shape = waterShape,
+                        shape = spaShape,
                     )
-                    .clip(waterShape)
+                    .clip(spaShape)
                     .background(
                         if (spaOn) {
                             Brush.linearGradient(
@@ -219,25 +219,25 @@ fun PoolVisualCanvas(
                         }
                     ),
             ) {
-                // Spa temperature info - centered
+                // Spa temperature — centered
                 if (spa != null) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .padding(horizontal = 4.dp),
+                            .padding(horizontal = 8.dp),
                     ) {
                         Text(
                             text = "${spa.temperature}\u00B0",
-                            fontSize = 32.sp,
+                            fontSize = 36.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (spaOn) TextBright else TextBright.copy(alpha = 0.5f),
                             letterSpacing = (-2).sp,
-                            lineHeight = 32.sp,
+                            lineHeight = 36.sp,
                         )
                         Text(
                             text = "set ${spa.setpoint}\u00B0",
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             color = if (spaOn) Color.White.copy(alpha = 0.5f) else TextFaint,
                             modifier = Modifier.clickable(
                                 interactionSource = remember { MutableInteractionSource() },
@@ -267,13 +267,13 @@ fun PoolVisualCanvas(
                 )
             }
 
-            // Light picker at bottom of pool
+            // Light picker — bottom left
             LightPicker(
                 lights = lights,
                 onModeSelect = onLightModeSelect,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(8.dp),
+                    .padding(10.dp),
             )
         }
     }

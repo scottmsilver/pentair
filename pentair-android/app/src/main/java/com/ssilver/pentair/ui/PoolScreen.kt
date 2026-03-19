@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,8 +29,15 @@ import com.ssilver.pentair.ui.theme.TextDim
 
 @Composable
 fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
-    val poolSystem by viewModel.state.collectAsState()
-    val connectionState by viewModel.connectionState.collectAsState()
+    val poolSystem by viewModel.state.collectAsStateWithLifecycle()
+    val connectionState by viewModel.connectionState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        viewModel.rejections.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
 
     var showSettings by remember { mutableStateOf(false) }
     var showPoolSetpoint by remember { mutableStateOf(false) }
@@ -51,27 +61,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             .fillMaxSize()
             .background(PoolBackground),
     ) {
-        // Gear icon - top right
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
-                .size(32.dp)
-                .clip(CircleShape)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { showSettings = true },
-        ) {
-            Text(
-                text = "\u2699",
-                fontSize = 18.sp,
-                color = TextDim,
-            )
-        }
-
-        // Pool visual - left aligned, below header area
+        // Pool visual - fills screen width
         PoolVisualCanvas(
             pool = pool,
             spa = spa,
@@ -83,7 +73,34 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             onLightModeSelect = { viewModel.setLightMode(it) },
             modifier = Modifier
                 .align(Alignment.TopStart)
-                .padding(start = 8.dp, top = 56.dp),
+                .padding(start = 10.dp, end = 10.dp, top = 44.dp),
+        )
+
+        // Gear icon — top right, outside the pool visual (matches web UI)
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 40.dp, end = 8.dp)
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { showSettings = true },
+        ) {
+            Text(
+                text = "\u2699",
+                fontSize = 22.sp,
+                color = TextDim,
+            )
+        }
+
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp),
         )
     }
 

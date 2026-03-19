@@ -10,13 +10,16 @@ interface PoolApiClient {
     suspend fun getPool(): PoolSystem
 
     @POST("/api/spa/on")
-    suspend fun spaOn(@Body body: Map<String, Any> = emptyMap()): ApiResponse
+    suspend fun spaOn(): ApiResponse
+
+    @POST("/api/spa/on")
+    suspend fun spaOnWithSetpoint(@Body body: @JvmSuppressWildcards Map<String, Any>): ApiResponse
 
     @POST("/api/spa/off")
     suspend fun spaOff(): ApiResponse
 
     @POST("/api/spa/heat")
-    suspend fun spaHeat(@Body body: Map<String, Any>): ApiResponse
+    suspend fun spaHeat(@Body body: @JvmSuppressWildcards Map<String, Any>): ApiResponse
 
     @POST("/api/spa/jets/on")
     suspend fun jetsOn(): ApiResponse
@@ -25,13 +28,16 @@ interface PoolApiClient {
     suspend fun jetsOff(): ApiResponse
 
     @POST("/api/pool/on")
-    suspend fun poolOn(@Body body: Map<String, Any> = emptyMap()): ApiResponse
+    suspend fun poolOn(): ApiResponse
+
+    @POST("/api/pool/on")
+    suspend fun poolOnWithSetpoint(@Body body: @JvmSuppressWildcards Map<String, Any>): ApiResponse
 
     @POST("/api/pool/off")
     suspend fun poolOff(): ApiResponse
 
     @POST("/api/pool/heat")
-    suspend fun poolHeat(@Body body: Map<String, Any>): ApiResponse
+    suspend fun poolHeat(@Body body: @JvmSuppressWildcards Map<String, Any>): ApiResponse
 
     @POST("/api/lights/on")
     suspend fun lightsOn(): ApiResponse
@@ -40,7 +46,7 @@ interface PoolApiClient {
     suspend fun lightsOff(): ApiResponse
 
     @POST("/api/lights/mode")
-    suspend fun lightsMode(@Body body: Map<String, Any>): ApiResponse
+    suspend fun lightsMode(@Body body: @JvmSuppressWildcards Map<String, Any>): ApiResponse
 
     @POST("/api/auxiliary/{id}/on")
     suspend fun auxOn(@Path("id") id: String): ApiResponse
