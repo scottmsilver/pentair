@@ -11,6 +11,7 @@ pub fn create_router(
     state: SharedState,
     cmd_tx: mpsc::Sender<AdapterCommand>,
     push_tx: broadcast::Sender<PushEvent>,
+    devices: crate::devices::DeviceManager,
 ) -> Router {
-    routes::router(state, cmd_tx, push_tx)
+    routes::router(state, cmd_tx, push_tx, devices)
 }

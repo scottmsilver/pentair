@@ -2,6 +2,7 @@ mod config;
 mod state;
 mod adapter;
 mod api;
+mod devices;
 
 use std::path::PathBuf;
 use tracing::info;
@@ -35,8 +36,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         adapter::run_adapter(adapter_host, adapter_state, cmd_rx, push_tx_adapter).await;
     });
 
+    // Load device token store
+    let devices_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pentair")
+        .join("devices.json");
+    let devices = devices::DeviceManager::load(devices_path);
+
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx);
+    let router = api::create_router(state, cmd_tx, push_tx, devices);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     info!("listening on {}", config.bind);
 

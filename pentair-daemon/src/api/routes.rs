@@ -18,14 +18,16 @@ pub struct AppState {
     pub shared: SharedState,
     pub cmd_tx: mpsc::Sender<AdapterCommand>,
     pub push_tx: broadcast::Sender<PushEvent>,
+    pub devices: crate::devices::DeviceManager,
 }
 
 pub fn router(
     shared: SharedState,
     cmd_tx: mpsc::Sender<AdapterCommand>,
     push_tx: broadcast::Sender<PushEvent>,
+    devices: crate::devices::DeviceManager,
 ) -> Router {
-    let state = AppState { shared, cmd_tx, push_tx };
+    let state = AppState { shared, cmd_tx, push_tx, devices };
 
     Router::new()
         // ── Web UI ─────────────────────────────────────────────────
@@ -58,6 +60,7 @@ pub fn router(
         .route("/api/raw/heat/cool", post(set_cool_setpoint))
         .route("/api/raw/lights", post(set_light))
         .route("/api/raw/chlor/set", post(set_chlor))
+        .route("/api/devices/register", post(register_device))
         .route("/api/cancel-delay", post(cancel_delay))
         .route("/api/refresh", post(refresh))
         .route("/api/ws", get(super::websocket::ws_handler))
@@ -267,6 +270,21 @@ async fn refresh(State(state): State<AppState>) -> Json<serde_json::Value> {
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
         Err(_) => Json(serde_json::json!({"ok": false, "error": "adapter disconnected"})),
     }
+}
+
+// ── Device registration ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct RegisterRequest {
+    token: String,
+}
+
+async fn register_device(
+    State(state): State<AppState>,
+    Json(body): Json<RegisterRequest>,
+) -> Json<serde_json::Value> {
+    state.devices.register(body.token).await;
+    Json(serde_json::json!({"ok": true}))
 }
 
 // ── Semantic route handlers ─────────────────────────────────────────────
