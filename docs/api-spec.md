@@ -23,7 +23,17 @@ Returns the complete pool system state in a single call. This is the only endpoi
     "temperature": 99,
     "setpoint": 59,
     "heat_mode": "heat-pump",
-    "heating": "off"
+    "heating": "off",
+    "heat_estimate": {
+      "available": false,
+      "minutes_remaining": null,
+      "current_temperature": 99,
+      "target_temperature": 59,
+      "confidence": "none",
+      "source": "none",
+      "reason": "not-heating",
+      "updated_at_unix_ms": 1774311705123
+    }
   },
   "spa": {
     "on": false,
@@ -31,6 +41,18 @@ Returns the complete pool system state in a single call. This is the only endpoi
     "setpoint": 104,
     "heat_mode": "heat-pump",
     "heating": "off",
+    "heat_estimate": {
+      "available": true,
+      "minutes_remaining": 18,
+      "current_temperature": 103,
+      "target_temperature": 104,
+      "confidence": "low",
+      "source": "configured",
+      "reason": "estimating",
+      "observed_rate_per_hour": null,
+      "configured_rate_per_hour": 9.7,
+      "updated_at_unix_ms": 1774311705123
+    },
     "accessories": {
       "jets": false
     }
@@ -80,6 +102,22 @@ Returns the complete pool system state in a single call. This is the only endpoi
 | `system.pool_spa_shared_pump` | Auto-detected from pump speed tables. If `true`, pool and spa are mutually exclusive |
 | `pool.heat_mode` | One of: `off`, `solar`, `solar-preferred`, `heat-pump` |
 | `pool.heating` | Current heater status: `off`, `solar`, `heater`, `both` |
+| `pool.heat_estimate` / `spa.heat_estimate` | Server-side estimate for time remaining to reach setpoint. Present when heating estimation is enabled in config. |
+
+**`heat_estimate` field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `available` | `true` when the daemon has enough information to provide an ETA |
+| `minutes_remaining` | Rounded-up minutes left until the body reaches setpoint |
+| `current_temperature` | Current body temperature in the system's configured unit |
+| `target_temperature` | Current body setpoint in the system's configured unit |
+| `confidence` | One of `none`, `low`, `medium`, `high` |
+| `source` | One of `none`, `configured`, `learned`, `observed`, `blended` |
+| `reason` | Why the estimate is or is not available: `estimating`, `at-temp`, `heat-off`, `not-heating`, `waiting-for-flow`, `missing-config`, `insufficient-data` |
+| `observed_rate_per_hour` | Live observed heating rate in the system's configured unit per hour, when enough session data exists |
+| `configured_rate_per_hour` | Baseline configured heating rate in the system's configured unit per hour |
+| `updated_at_unix_ms` | Server timestamp for the estimate calculation |
 
 If the daemon hasn't connected to the adapter yet, returns:
 ```json
@@ -343,4 +381,25 @@ bind = "0.0.0.0:8080"
 # Override spa accessory detection (default: name convention for "jets", "blower", etc.)
 [associations]
 spa = ["Bubbler", "Air Blower"]
+
+# Optional server-side heat-up estimation.
+[heating]
+enabled = true
+history_path = "~/.pentair/heat-estimator.json"
+sample_window_minutes = 180
+minimum_runtime_minutes = 10
+minimum_temp_rise_f = 1.0
+
+[heating.heater]
+kind = "gas"
+output_btu_per_hr = 400000
+efficiency = 0.84
+
+[heating.pool]
+volume_gallons = 16000
+
+[heating.spa]
+volume_gallons = 500
 ```
+
+`[heating]` is optional. When enabled, the daemon combines configured heater/body sizes with observed heating sessions to estimate time remaining until the pool or spa reaches setpoint.

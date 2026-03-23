@@ -10,14 +10,41 @@ use tracing::{error, info};
 
 /// Commands sent from the API to the adapter task
 pub enum AdapterCommand {
-    SetCircuit { circuit_id: i32, state: bool, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    SetHeatSetpoint { body_type: i32, temp: i32, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    SetHeatMode { body_type: i32, mode: i32, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    SetCoolSetpoint { body_type: i32, temp: i32, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    SetLightCommand { command: i32, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    SetScgConfig { pool: i32, spa: i32, reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    CancelDelay { reply: tokio::sync::oneshot::Sender<Result<(), String>> },
-    RefreshAll { reply: tokio::sync::oneshot::Sender<Result<(), String>> },
+    SetCircuit {
+        circuit_id: i32,
+        state: bool,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    SetHeatSetpoint {
+        body_type: i32,
+        temp: i32,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    SetHeatMode {
+        body_type: i32,
+        mode: i32,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    SetCoolSetpoint {
+        body_type: i32,
+        temp: i32,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    SetLightCommand {
+        command: i32,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    SetScgConfig {
+        pool: i32,
+        spa: i32,
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    CancelDelay {
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    RefreshAll {
+        reply: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Push events sent to WebSocket subscribers
@@ -46,7 +73,10 @@ pub async fn run_adapter(
             // Auto-discover
             match discover().await {
                 Ok(resp) => {
-                    let addr = format!("{}.{}.{}.{}:{}", resp.ip[0], resp.ip[1], resp.ip[2], resp.ip[3], resp.port);
+                    let addr = format!(
+                        "{}.{}.{}.{}:{}",
+                        resp.ip[0], resp.ip[1], resp.ip[2], resp.ip[3], resp.port
+                    );
                     info!("discovered adapter at {}", addr);
                     addr
                 }
@@ -59,13 +89,17 @@ pub async fn run_adapter(
             }
         } else {
             let host = &adapter_host;
-            if host.contains(':') { host.to_string() } else { format!("{}:80", host) }
+            if host.contains(':') {
+                host.to_string()
+            } else {
+                format!("{}:80", host)
+            }
         };
 
         match Client::connect(&addr).await {
             Ok(mut client) => {
                 info!("connected to adapter at {}", addr);
-                backoff = Duration::from_secs(1);  // Reset backoff on success
+                backoff = Duration::from_secs(1); // Reset backoff on success
 
                 // Initial data load
                 refresh_all(&mut client, &state).await;
@@ -111,7 +145,9 @@ pub async fn run_adapter(
 
                 // Connection lost — notify
                 if let Some(ref sender) = fcm {
-                    sender.send("Connection Lost", "Lost connection to pool adapter").await;
+                    sender
+                        .send("Connection Lost", "Lost connection to pool adapter")
+                        .await;
                 }
 
                 // Try graceful disconnect
@@ -134,7 +170,11 @@ async fn handle_command(
     cmd: AdapterCommand,
 ) -> Result<(), ()> {
     match cmd {
-        AdapterCommand::SetCircuit { circuit_id, state: on, reply } => {
+        AdapterCommand::SetCircuit {
+            circuit_id,
+            state: on,
+            reply,
+        } => {
             let result = client.set_circuit(circuit_id, on).await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
@@ -146,7 +186,11 @@ async fn handle_command(
                 Err(())
             }
         }
-        AdapterCommand::SetHeatSetpoint { body_type, temp, reply } => {
+        AdapterCommand::SetHeatSetpoint {
+            body_type,
+            temp,
+            reply,
+        } => {
             let result = client.set_heat_setpoint(body_type, temp).await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
@@ -158,7 +202,11 @@ async fn handle_command(
                 Err(())
             }
         }
-        AdapterCommand::SetHeatMode { body_type, mode, reply } => {
+        AdapterCommand::SetHeatMode {
+            body_type,
+            mode,
+            reply,
+        } => {
             let result = client.set_heat_mode(body_type, mode).await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
@@ -170,11 +218,19 @@ async fn handle_command(
                 Err(())
             }
         }
-        AdapterCommand::SetCoolSetpoint { body_type, temp, reply } => {
+        AdapterCommand::SetCoolSetpoint {
+            body_type,
+            temp,
+            reply,
+        } => {
             let result = client.set_cool_setpoint(body_type, temp).await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
-            if ok { Ok(()) } else { Err(()) }
+            if ok {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         AdapterCommand::SetLightCommand { command, reply } => {
             let result = client.set_light_command(command).await;
@@ -182,28 +238,54 @@ async fn handle_command(
             if ok {
                 // Track fire-and-forget light mode in daemon state.
                 let mode_name = match command {
-                    0 => "off", 1 => "on", 2 => "set", 3 => "sync",
-                    4 => "swim", 5 => "party", 6 => "romantic", 7 => "caribbean",
-                    8 => "american", 9 => "sunset", 10 => "royal", 11 => "save",
-                    12 => "recall", 13 => "blue", 14 => "green", 15 => "red",
-                    16 => "white", 17 => "purple", _ => "unknown",
+                    0 => "off",
+                    1 => "on",
+                    2 => "set",
+                    3 => "sync",
+                    4 => "swim",
+                    5 => "party",
+                    6 => "romantic",
+                    7 => "caribbean",
+                    8 => "american",
+                    9 => "sunset",
+                    10 => "royal",
+                    11 => "save",
+                    12 => "recall",
+                    13 => "blue",
+                    14 => "green",
+                    15 => "red",
+                    16 => "white",
+                    17 => "purple",
+                    _ => "unknown",
                 };
                 state.write().await.light_mode = Some(mode_name.to_string());
             }
             let _ = reply.send(result.map_err(|e| e.to_string()));
-            if ok { Ok(()) } else { Err(()) }
+            if ok {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         AdapterCommand::SetScgConfig { pool, spa, reply } => {
             let result = client.set_scg_config(pool, spa).await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
-            if ok { Ok(()) } else { Err(()) }
+            if ok {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         AdapterCommand::CancelDelay { reply } => {
             let result = client.cancel_delay().await;
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
-            if ok { Ok(()) } else { Err(()) }
+            if ok {
+                Ok(())
+            } else {
+                Err(())
+            }
         }
         AdapterCommand::RefreshAll { reply } => {
             refresh_all(client, state).await;
@@ -237,21 +319,27 @@ async fn refresh_all(client: &mut Client, state: &SharedState) {
     }
 
     // Rebuild semantic model + circuit map after full refresh
-    state.write().await.rebuild_semantic();
+    state.write().await.refresh_semantic_state();
 }
 
-async fn refresh_status(client: &mut Client, state: &SharedState) -> Result<(), pentair_client::error::ClientError> {
+async fn refresh_status(
+    client: &mut Client,
+    state: &SharedState,
+) -> Result<(), pentair_client::error::ClientError> {
     let status = client.get_status().await?;
-    state.write().await.status = Some(status);
+    let mut guard = state.write().await;
+    guard.status = Some(status);
+    guard.refresh_semantic_state();
     Ok(())
 }
 
 // ─── FCM event detection ────────────────────────────────────────────────
 
 fn spa_is_ready(system: &PoolSystem) -> bool {
-    system.spa.as_ref().map_or(false, |spa| {
-        spa.on && spa.temperature >= spa.setpoint
-    })
+    system
+        .spa
+        .as_ref()
+        .map_or(false, |spa| spa.on && spa.temperature >= spa.setpoint)
 }
 
 async fn detect_transitions(
@@ -271,38 +359,46 @@ async fn detect_transitions(
     // Spa ready: spa on + temp >= setpoint, transitioning from not-ready to ready
     if spa_is_ready(curr) && !spa_is_ready(prev) {
         if let Some(ref spa) = curr.spa {
-            sender.send(
-                "Spa Ready",
-                &format!("Spa has reached {}{}.", spa.temperature, curr.system.temp_unit),
-            ).await;
+            sender
+                .send(
+                    "Spa Ready",
+                    &format!(
+                        "Spa has reached {}{}.",
+                        spa.temperature, curr.system.temp_unit
+                    ),
+                )
+                .await;
         }
     }
 
     // Freeze protection activated
     if curr.system.freeze_protection && !prev.system.freeze_protection {
-        sender.send(
-            "Freeze Protection",
-            "Freeze protection has been activated.",
-        ).await;
+        sender
+            .send("Freeze Protection", "Freeze protection has been activated.")
+            .await;
     }
 
     // Heater started (spa)
     if let (Some(prev_spa), Some(curr_spa)) = (&prev.spa, &curr.spa) {
         if prev_spa.heating == "off" && curr_spa.heating != "off" {
-            sender.send(
-                "Spa Heater Started",
-                &format!("Spa heater is now active ({}).", curr_spa.heating),
-            ).await;
+            sender
+                .send(
+                    "Spa Heater Started",
+                    &format!("Spa heater is now active ({}).", curr_spa.heating),
+                )
+                .await;
         }
     }
 
     // Heater started (pool)
     if let (Some(prev_pool), Some(curr_pool)) = (&prev.pool, &curr.pool) {
         if prev_pool.heating == "off" && curr_pool.heating != "off" {
-            sender.send(
-                "Pool Heater Started",
-                &format!("Pool heater is now active ({}).", curr_pool.heating),
-            ).await;
+            sender
+                .send(
+                    "Pool Heater Started",
+                    &format!("Pool heater is now active ({}).", curr_pool.heating),
+                )
+                .await;
         }
     }
 }

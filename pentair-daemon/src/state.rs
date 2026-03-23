@@ -1,9 +1,12 @@
+use crate::config::HeatingConfig;
+use crate::heat::HeatEstimator;
 use pentair_protocol::responses::*;
 use pentair_protocol::semantic::{self, CircuitMap, PoolSystem, PoolSystemInput};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct CachedState {
     pub status: Option<PoolStatus>,
     pub config: Option<ControllerConfig>,
@@ -14,12 +17,14 @@ pub struct CachedState {
     pub light_mode: Option<String>,
     /// Config-driven spa associations (circuit names to treat as spa accessories).
     pub spa_associations: Vec<String>,
+    pub heat: HeatEstimator,
     circuit_map: Option<CircuitMap>,
 }
 
 impl CachedState {
     pub fn pool_system(&self) -> Option<PoolSystem> {
-        let (system, _) = self.build_semantic()?;
+        let (mut system, _) = self.build_semantic()?;
+        self.heat.apply_to_system(&mut system);
         Some(system)
     }
 
@@ -27,9 +32,10 @@ impl CachedState {
         self.circuit_map.as_ref()?.resolve(id)
     }
 
-    pub fn rebuild_semantic(&mut self) {
-        if let Some((_, map)) = self.build_semantic() {
+    pub fn refresh_semantic_state(&mut self) {
+        if let Some((system, map)) = self.build_semantic() {
             self.circuit_map = Some(map);
+            self.heat.update(&system);
         }
     }
 
@@ -50,10 +56,21 @@ impl CachedState {
 
 pub type SharedState = Arc<RwLock<CachedState>>;
 
-pub fn new_shared_state(spa_associations: Vec<String>) -> SharedState {
+pub fn new_shared_state(
+    spa_associations: Vec<String>,
+    heating: HeatingConfig,
+    heating_history_path: PathBuf,
+) -> SharedState {
     Arc::new(RwLock::new(CachedState {
         pumps: vec![None; 8],
         spa_associations,
-        ..Default::default()
+        heat: HeatEstimator::load(heating, heating_history_path),
+        status: None,
+        config: None,
+        chem: None,
+        scg: None,
+        version: None,
+        light_mode: None,
+        circuit_map: None,
     }))
 }

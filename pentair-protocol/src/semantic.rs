@@ -25,6 +25,21 @@ pub struct PoolSystem {
     pub system: SystemInfo,
 }
 
+/// Server-side estimate of time remaining to reach setpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeatEstimate {
+    pub available: bool,
+    pub minutes_remaining: Option<u32>,
+    pub current_temperature: i32,
+    pub target_temperature: i32,
+    pub confidence: String,
+    pub source: String,
+    pub reason: String,
+    pub observed_rate_per_hour: Option<f64>,
+    pub configured_rate_per_hour: Option<f64>,
+    pub updated_at_unix_ms: i64,
+}
+
 /// Pool body — on/off, temperature, heating.
 #[derive(Debug, Clone, Serialize)]
 pub struct BodyState {
@@ -38,6 +53,8 @@ pub struct BodyState {
     pub setpoint: i32,
     pub heat_mode: String,
     pub heating: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heat_estimate: Option<HeatEstimate>,
 }
 
 /// Spa body — everything pool has, plus accessories like jets.
@@ -51,6 +68,8 @@ pub struct SpaState {
     pub setpoint: i32,
     pub heat_mode: String,
     pub heating: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heat_estimate: Option<HeatEstimate>,
     /// Spa accessories (jets, blower, etc.) keyed by slug ID.
     pub accessories: HashMap<String, bool>,
 }
@@ -139,8 +158,22 @@ pub struct PoolSystemInput<'a> {
 }
 
 const AVAILABLE_LIGHT_MODES: &[&str] = &[
-    "off", "on", "set", "sync", "swim", "party", "romantic", "caribbean",
-    "american", "sunset", "royal", "blue", "green", "red", "white", "purple",
+    "off",
+    "on",
+    "set",
+    "sync",
+    "swim",
+    "party",
+    "romantic",
+    "caribbean",
+    "american",
+    "sunset",
+    "royal",
+    "blue",
+    "green",
+    "red",
+    "white",
+    "purple",
 ];
 
 /// Build the semantic pool system model and circuit map from raw protocol data.
@@ -164,8 +197,12 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             if primary_pump.is_none() {
                 primary_pump = Some(PumpInfo {
                     pump_type: match pump.pump_type {
-                        1 => "VF", 2 => "VS", 3 => "VSF", _ => "Unknown",
-                    }.to_string(),
+                        1 => "VF",
+                        2 => "VS",
+                        3 => "VSF",
+                        _ => "Unknown",
+                    }
+                    .to_string(),
                     running: pump.is_running,
                     watts: pump.watts,
                     rpm: pump.rpm,
@@ -176,12 +213,18 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             let mut has_pool = false;
             let mut has_spa = false;
             for pc in &pump.circuits {
-                if pc.circuit_id == 0 { continue; }
+                if pc.circuit_id == 0 {
+                    continue;
+                }
                 let cid = pc.circuit_id as i32;
                 pump_circuit_ids.insert(cid);
                 if let Some(circ) = config.circuits.iter().find(|c| (c.circuit_id - 499) == cid) {
-                    if circ.function == 2 { has_pool = true; }
-                    if circ.function == 1 { has_spa = true; }
+                    if circ.function == 2 {
+                        has_pool = true;
+                    }
+                    if circ.function == 1 {
+                        has_spa = true;
+                    }
                 }
             }
             if has_pool && has_spa {
@@ -192,7 +235,9 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
 
     // ── Step 2: Classify circuits ───────────────────────────────────
     let circuit_state = |wire_id: i32| -> bool {
-        status.circuits.iter()
+        status
+            .circuits
+            .iter()
             .find(|c| c.circuit_id == wire_id)
             .map(|c| c.state)
             .unwrap_or(false)
@@ -223,7 +268,9 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
                 // Check if this circuit is a spa accessory:
                 // 1. Config override (explicit list in TOML)
                 // 2. Name convention ("jets", "blower", etc.)
-                let is_spa_accessory = input.spa_associations.iter()
+                let is_spa_accessory = input
+                    .spa_associations
+                    .iter()
                     .any(|name| name.eq_ignore_ascii_case(&circ.name))
                     || associate_by_name(&circ.name) == Some("spa");
 
@@ -245,12 +292,15 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
     let spa_body = status.bodies.iter().find(|b| b.body_type == 1);
 
     // Pump is actively flowing water when running with measurable RPM.
-    let pump_flowing = primary_pump.as_ref()
+    let pump_flowing = primary_pump
+        .as_ref()
         .map(|p| p.running && p.rpm > 0)
         .unwrap_or(false);
 
     let pool_state = pool_body.map(|body| {
-        let on = pool_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false);
+        let on = pool_circuit
+            .map(|c| circuit_state(c.circuit_id))
+            .unwrap_or(false);
         BodyState {
             on,
             active: on && pump_flowing,
@@ -258,11 +308,14 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             setpoint: body.set_point,
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
+            heat_estimate: None,
         }
     });
 
     let spa_state = spa_body.map(|body| {
-        let on = spa_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false);
+        let on = spa_circuit
+            .map(|c| circuit_state(c.circuit_id))
+            .unwrap_or(false);
         let mut accessories = HashMap::new();
         for circ in &spa_accessory_circuits {
             let slug = slugify(&circ.name);
@@ -275,6 +328,7 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             setpoint: body.set_point,
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
+            heat_estimate: None,
             accessories,
         }
     });
@@ -287,13 +341,14 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
     });
 
     // ── Step 5: Auxiliaries ─────────────────────────────────────────
-    let auxiliaries: Vec<AuxState> = aux_circuits.iter().map(|circ| {
-        AuxState {
+    let auxiliaries: Vec<AuxState> = aux_circuits
+        .iter()
+        .map(|circ| AuxState {
             id: slugify(&circ.name),
             name: circ.name.clone(),
             on: circuit_state(circ.circuit_id),
-        }
-    }).collect();
+        })
+        .collect();
 
     // ── Step 6: System ──────────────────────────────────────────────
     let system = SystemInfo {
@@ -301,7 +356,8 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             1 => "IntelliTouch",
             2 => "EasyTouch",
             _ => "Unknown",
-        }.to_string(),
+        }
+        .to_string(),
         firmware: input.version.map(|v| v.to_string()),
         temp_unit: if config.is_celsius { "°C" } else { "°F" },
         air_temperature: status.air_temp,
@@ -344,14 +400,24 @@ fn slugify(name: &str) -> String {
 
 fn fmt_heat_mode(m: i32) -> String {
     match m {
-        0 => "off", 1 => "solar", 2 => "solar-preferred", 3 => "heat-pump", _ => "unknown",
-    }.to_string()
+        0 => "off",
+        1 => "solar",
+        2 => "solar-preferred",
+        3 => "heat-pump",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 fn fmt_heat_status(s: i32) -> String {
     match s {
-        0 => "off", 1 => "solar", 2 => "heater", 3 => "both", _ => "unknown",
-    }.to_string()
+        0 => "off",
+        1 => "solar",
+        2 => "heater",
+        3 => "both",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────
