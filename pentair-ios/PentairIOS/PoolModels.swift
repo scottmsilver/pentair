@@ -188,3 +188,136 @@ enum SpaMode: String, CaseIterable, Identifiable {
         rawValue.capitalized
     }
 }
+
+enum HeatingBody {
+    case pool
+    case spa
+}
+
+enum HeatingStatusTone {
+    case heating
+    case neutral
+    case warning
+    case error
+}
+
+struct HeatingStatusSummary {
+    let text: String
+    let tone: HeatingStatusTone
+}
+
+extension PoolSystem {
+    func heatingStatus(for body: HeatingBody) -> HeatingStatusSummary? {
+        switch body {
+        case .pool:
+            guard let pool else { return nil }
+            return resolveHeatingStatus(
+                on: pool.on,
+                active: pool.active,
+                temperature: pool.temperature,
+                setpoint: pool.setpoint,
+                heatMode: pool.heatMode,
+                heating: pool.heating,
+                other: spa.map {
+                    OtherBodyStatus(
+                        name: "Spa",
+                        on: $0.on,
+                        active: $0.active,
+                        temperature: $0.temperature,
+                        setpoint: $0.setpoint,
+                        heatMode: $0.heatMode,
+                        heating: $0.heating
+                    )
+                },
+                sharedPump: system.poolSpaSharedPump
+            )
+        case .spa:
+            guard let spa else { return nil }
+            return resolveHeatingStatus(
+                on: spa.on,
+                active: spa.active,
+                temperature: spa.temperature,
+                setpoint: spa.setpoint,
+                heatMode: spa.heatMode,
+                heating: spa.heating,
+                other: pool.map {
+                    OtherBodyStatus(
+                        name: "Pool",
+                        on: $0.on,
+                        active: $0.active,
+                        temperature: $0.temperature,
+                        setpoint: $0.setpoint,
+                        heatMode: $0.heatMode,
+                        heating: $0.heating
+                    )
+                },
+                sharedPump: system.poolSpaSharedPump
+            )
+        }
+    }
+}
+
+private struct OtherBodyStatus {
+    let name: String
+    let on: Bool
+    let active: Bool
+    let temperature: Int
+    let setpoint: Int
+    let heatMode: String
+    let heating: String
+}
+
+private func resolveHeatingStatus(
+    on: Bool,
+    active: Bool,
+    temperature: Int,
+    setpoint: Int,
+    heatMode: String,
+    heating: String,
+    other: OtherBodyStatus?,
+    sharedPump: Bool
+) -> HeatingStatusSummary {
+    let normalizedHeating = heating.lowercased()
+    let normalizedHeatMode = heatMode.lowercased()
+
+    if normalizedHeating != "off", normalizedHeating != "unknown" {
+        return HeatingStatusSummary(text: "Heating", tone: .heating)
+    }
+
+    if on {
+        if normalizedHeatMode == "off" {
+            return HeatingStatusSummary(text: "Heat off", tone: .neutral)
+        }
+
+        if temperature >= setpoint {
+            return HeatingStatusSummary(text: "At temp", tone: .neutral)
+        }
+
+        if !active {
+            return HeatingStatusSummary(text: "Waiting for flow", tone: .warning)
+        }
+
+        return HeatingStatusSummary(text: "Heat error", tone: .error)
+    }
+
+    if sharedPump, let other, other.on {
+        let otherHeating = other.heating.lowercased()
+        let otherHeatMode = other.heatMode.lowercased()
+
+        if otherHeating != "off", otherHeating != "unknown" {
+            return HeatingStatusSummary(text: "Heating \(other.name.lowercased())", tone: .heating)
+        }
+
+        if !other.active {
+            return HeatingStatusSummary(text: "\(other.name) starting", tone: .warning)
+        }
+
+        if otherHeatMode != "off", other.temperature >= other.setpoint {
+            return HeatingStatusSummary(text: "\(other.name) at temp", tone: .neutral)
+        }
+
+        return HeatingStatusSummary(text: "\(other.name) on", tone: .neutral)
+    }
+
+    return HeatingStatusSummary(text: "Off", tone: .neutral)
+}

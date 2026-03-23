@@ -1,9 +1,8 @@
 package com.ssilver.pentair.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,42 +14,56 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.ssilver.pentair.data.BodyState
 import com.ssilver.pentair.data.ConnectionState
 import com.ssilver.pentair.data.LightState
 import com.ssilver.pentair.data.SpaState
-import com.ssilver.pentair.data.SystemInfo
-import com.ssilver.pentair.ui.theme.Accent
-import com.ssilver.pentair.ui.theme.Gold
-import com.ssilver.pentair.ui.theme.PoolBackground
-import com.ssilver.pentair.ui.theme.TextBright
-import com.ssilver.pentair.ui.theme.TextDim
-import com.ssilver.pentair.ui.theme.TextFaint
 import com.ssilver.pentair.ui.theme.Warm
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PoolModernScreen(
     pool: BodyState?,
     spa: SpaState?,
     lights: LightState?,
-    systemInfo: SystemInfo?,
+    isLoading: Boolean,
+    sharedPump: Boolean,
     connectionState: ConnectionState,
     spaState: String,
     onShowSettings: () -> Unit,
@@ -60,212 +73,166 @@ fun PoolModernScreen(
     onLightModeSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
-        modifier = modifier.background(
-            Brush.linearGradient(
-                colors = listOf(
-                    Color(0xFF091120),
-                    Color(0xFF0B2031),
-                    PoolBackground,
+    Scaffold(
+        modifier = modifier,
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = {
+                    ConnectionChip(
+                        connectionState = connectionState,
+                        onClick = onShowSettings,
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent,
+                    actionIconContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
+                actions = {
+                    IconButton(onClick = onShowSettings) {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = "Settings",
+                        )
+                    }
+                },
             )
-        ),
-    ) {
+        },
+    ) { innerPadding ->
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 18.dp, bottom = 24.dp),
-            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
         ) {
-            item {
-                ModernHeader(
-                    connectionState = connectionState,
-                    systemInfo = systemInfo,
-                    onShowSettings = onShowSettings,
-                )
-            }
+            if (isLoading) {
+                item {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(260.dp),
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+            } else {
+                if (pool != null) {
+                    item {
+                        BodyControlCard(
+                            title = "Pool",
+                            temperature = pool.temperature,
+                            setpoint = pool.setpoint,
+                            status = poolHeatingStatus(pool, spa, sharedPump),
+                            onSetpointClick = onPoolSetpointClick,
+                        )
+                    }
+                }
 
-            item {
-                BodyControlCard(
-                    title = "Pool",
-                    temperature = pool?.temperature,
-                    setpoint = pool?.setpoint,
-                    heating = pool?.heating,
-                    runningLabel = if (pool?.on == true) "Running" else "Off",
-                    runningColor = if (pool?.on == true) Color(0xFF7DFFD8) else TextDim,
-                    onSetpointClick = onPoolSetpointClick,
-                    controls = {},
-                )
-            }
+                if (spa != null) {
+                    item {
+                        BodyControlCard(
+                            title = "Spa",
+                            temperature = spa.temperature,
+                            setpoint = spa.setpoint,
+                            status = spaHeatingStatus(spa, pool, sharedPump),
+                            onSetpointClick = onSpaSetpointClick,
+                        ) {
+                            SegmentedActionRow(
+                                options = listOf("Off", "Spa", "Jets"),
+                                selected = spaState.replaceFirstChar { it.uppercase() },
+                                onSelect = { option -> onSpaStateChange(option.lowercase()) },
+                            )
+                        }
+                    }
+                }
 
-            item {
-                BodyControlCard(
-                    title = "Spa",
-                    temperature = spa?.temperature,
-                    setpoint = spa?.setpoint,
-                    heating = spa?.heating,
-                    runningLabel = spaState.replaceFirstChar { it.uppercase() },
-                    runningColor = if (spa?.on == true) Gold else TextDim,
-                    onSetpointClick = onSpaSetpointClick,
-                ) {
-                    SegmentedActionRow(
-                        options = listOf("Off", "Spa", "Jets"),
-                        selected = spaState.replaceFirstChar { it.uppercase() },
-                        onSelect = { option ->
-                            onSpaStateChange(option.lowercase())
-                        },
-                    )
+                if (lights != null) {
+                    item {
+                        LightsCard(
+                            lights = lights,
+                            onLightModeSelect = onLightModeSelect,
+                        )
+                    }
                 }
             }
-
-            item {
-                LightsCard(
-                    lights = lights,
-                    onLightModeSelect = onLightModeSelect,
-                )
-            }
         }
     }
 }
 
 @Composable
-private fun ModernHeader(
+private fun ConnectionChip(
     connectionState: ConnectionState,
-    systemInfo: SystemInfo?,
-    onShowSettings: () -> Unit,
+    onClick: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.weight(1f),
-        ) {
-            ConnectionChip(connectionState = connectionState)
-
-            if (systemInfo != null) {
-                Text(
-                    text = "${systemInfo.controller} \u2022 ${systemInfo.air_temperature}\u00B0",
-                    fontSize = 13.sp,
-                    color = TextDim,
-                )
-            }
-        }
-
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(Color.White.copy(alpha = 0.08f))
-                .border(1.dp, Color.White.copy(alpha = 0.10f), CircleShape)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onShowSettings,
-                ),
-        ) {
-            Text(
-                text = "\u2699",
-                fontSize = 20.sp,
-                color = TextBright,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConnectionChip(connectionState: ConnectionState) {
     val dotColor = when (connectionState) {
-        ConnectionState.CONNECTED -> Color(0xFF7DFFD8)
-        ConnectionState.DISCONNECTED -> Color(0xFFFF7A7A)
-        ConnectionState.DISCOVERING -> Color(0xFF8EC5FF)
+        ConnectionState.CONNECTED -> Color(0xFF4ADE80)
+        ConnectionState.CONNECTING -> Color(0xFFF59E0B)
+        ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.error
+        ConnectionState.DISCOVERING -> MaterialTheme.colorScheme.primary
     }
     val label = when (connectionState) {
         ConnectionState.CONNECTED -> "Connected"
+        ConnectionState.CONNECTING -> "Connecting"
         ConnectionState.DISCONNECTED -> "Disconnected"
         ConnectionState.DISCOVERING -> "Searching"
     }
 
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(Color.White.copy(alpha = 0.08f))
-            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(dotColor),
-        )
-
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextBright,
-        )
-    }
+    AssistChip(
+        onClick = onClick,
+        label = { Text(label) },
+        leadingIcon = {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(dotColor),
+            )
+        },
+    )
 }
 
 @Composable
 private fun BodyControlCard(
     title: String,
-    temperature: Int?,
-    setpoint: Int?,
-    heating: String?,
-    runningLabel: String,
-    runningColor: Color,
+    temperature: Int,
+    setpoint: Int,
+    status: HeatingStatusUi,
     onSetpointClick: () -> Unit,
-    controls: @Composable () -> Unit,
+    controls: @Composable ColumnScope.() -> Unit = {},
 ) {
-    ModernPanelCard {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+            modifier = Modifier.padding(20.dp),
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = title,
-                    fontSize = 18.sp,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextBright,
                 )
-
                 Spacer(modifier = Modifier.weight(1f))
-
-                StatusMiniChip(
-                    text = if (heating == null || heating == "off") "Not heating" else "Heating",
-                    color = if (heating == null || heating == "off") TextDim else Warm,
-                )
-                Spacer(modifier = Modifier.size(8.dp))
-                StatusMiniChip(
-                    text = runningLabel,
-                    color = runningColor,
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
                 Text(
-                    text = temperature?.let { "$it\u00B0" } ?: "--\u00B0",
-                    fontSize = 46.sp,
-                    lineHeight = 46.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = TextBright,
+                    text = status.label,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = heatingStatusColor(status),
                 )
-                Spacer(modifier = Modifier.weight(1f))
             }
+
+            Text(
+                text = "$temperature\u00B0",
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
 
             SetpointRow(
                 label = "Setpoint",
-                value = setpoint?.let { "$it\u00B0" } ?: "--",
+                value = "$setpoint\u00B0",
                 onClick = onSetpointClick,
             )
 
@@ -275,22 +242,11 @@ private fun BodyControlCard(
 }
 
 @Composable
-private fun StatusMiniChip(text: String, color: Color) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(color.copy(alpha = 0.14f))
-            .border(1.dp, color.copy(alpha = 0.28f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    ) {
-        Text(
-            text = text,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = color,
-        )
-    }
+private fun heatingStatusColor(status: HeatingStatusUi): Color = when (status.tone) {
+    HeatingStatusTone.HEATING -> Warm
+    HeatingStatusTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
+    HeatingStatusTone.WARNING -> Color(0xFFF59E0B)
+    HeatingStatusTone.ERROR -> MaterialTheme.colorScheme.error
 }
 
 @Composable
@@ -299,77 +255,61 @@ private fun SetpointRow(
     value: String,
     onClick: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = MaterialTheme.shapes.large,
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color.White.copy(alpha = 0.07f))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .clickable(onClick = onClick),
     ) {
-        Text(
-            text = label,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Medium,
-            color = TextBright,
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        Text(
-            text = value,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextBright,
+        ListItem(
+            headlineContent = {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+            },
+            trailingContent = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            colors = ListItemDefaults.colors(
+                containerColor = Color.Transparent,
+            ),
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SegmentedActionRow(
     options: List<String>,
     selected: String,
     onSelect: (String) -> Unit,
 ) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    SingleChoiceSegmentedButtonRow(
         modifier = Modifier.fillMaxWidth(),
     ) {
-        options.forEach { option ->
-            val isSelected = selected == option
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(
-                        if (isSelected) Accent
-                        else Color.White.copy(alpha = 0.08f)
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = if (isSelected) Accent else Color.White.copy(alpha = 0.08f),
-                        shape = RoundedCornerShape(14.dp),
-                    )
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                    ) { onSelect(option) }
-                    .padding(vertical = 12.dp),
-            ) {
-                Text(
-                    text = option,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isSelected) PoolBackground else TextBright,
-                )
-            }
+        options.forEachIndexed { index, option ->
+            SegmentedButton(
+                selected = selected == option,
+                onClick = { onSelect(option) },
+                shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),
+                label = { Text(option) },
+            )
         }
     }
 }
@@ -377,59 +317,50 @@ private fun SegmentedActionRow(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LightsCard(
-    lights: LightState?,
+    lights: LightState,
     onLightModeSelect: (String) -> Unit,
 ) {
-    ModernPanelCard {
-        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(20.dp),
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
                     text = "Lights",
-                    fontSize = 18.sp,
+                    style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
-                    color = TextBright,
                 )
                 Spacer(modifier = Modifier.weight(1f))
                 Text(
                     text = lightsStatusTitle(lights),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (lights?.on == true) TextBright else TextDim,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
 
-            if (lights == null) {
-                Text(
-                    text = "Waiting for the light controller to report in.",
-                    fontSize = 13.sp,
-                    color = TextDim,
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                maxItemsInEachRow = 6,
+            ) {
+                LightModeSwatch(
+                    label = "Off",
+                    brush = null,
+                    selected = !lights.on,
+                    onClick = { onLightModeSelect("off") },
                 )
-            } else {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
-                    maxItemsInEachRow = 5,
-                ) {
-                    LightModeSwatch(
-                        label = "Off",
-                        brush = null,
-                        selected = !lights.on,
-                    ) {
-                        onLightModeSelect("off")
-                    }
 
-                    selectableLightModes(lights).forEach { mode ->
-                        LightModeSwatch(
-                            label = lightModeLabel(mode),
-                            brush = lightModeBrush(mode),
-                            selected = lights.on && lights.mode == mode,
-                        ) {
-                            onLightModeSelect(mode)
-                        }
-                    }
+                selectableLightModes(lights).forEach { mode ->
+                    LightModeSwatch(
+                        label = lightModeLabel(mode),
+                        brush = lightModeBrush(mode),
+                        selected = lights.on && lights.mode == mode,
+                        onClick = { onLightModeSelect(mode) },
+                    )
                 }
             }
         }
@@ -443,64 +374,56 @@ private fun LightModeSwatch(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+    Box(
+        contentAlignment = Alignment.Center,
         modifier = Modifier
-            .width(56.dp)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
-            ),
+            .size(50.dp)
+            .semantics { contentDescription = label }
+            .clickable(onClick = onClick),
     ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(42.dp)
-                .clip(CircleShape)
-                .background(brush ?: Brush.linearGradient(listOf(Color(0xFF0A0A0A), Color(0xFF0A0A0A))))
-                .border(
-                    width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) Accent else Color.White.copy(alpha = 0.14f),
-                    shape = CircleShape,
-                ),
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            tonalElevation = if (selected) 3.dp else 0.dp,
+            border = BorderStroke(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+            ),
+            modifier = Modifier.size(46.dp),
         ) {
-            if (brush == null) {
-                Text(
-                    text = "\u25CF",
-                    fontSize = 12.sp,
-                    color = TextDim,
-                )
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(5.dp)
+                    .clip(CircleShape)
+                    .background(
+                        brush ?: Brush.linearGradient(
+                            listOf(
+                                MaterialTheme.colorScheme.scrim,
+                                MaterialTheme.colorScheme.scrim,
+                            )
+                        )
+                    ),
+            ) {
+                if (brush == null) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant),
+                    )
+                }
             }
         }
-
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            lineHeight = 12.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (selected) TextBright else TextDim,
-        )
     }
 }
 
-@Composable
-private fun ModernPanelCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        verticalArrangement = Arrangement.spacedBy(0.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(28.dp))
-            .background(Color.Black.copy(alpha = 0.20f))
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(28.dp))
-            .padding(18.dp),
-        content = content,
-    )
-}
-
-private fun lightsStatusTitle(lights: LightState?): String {
-    if (lights == null) return "Waiting"
+private fun lightsStatusTitle(lights: LightState): String {
     if (!lights.on) return "Off"
     return lightModeLabel(lights.mode ?: "on")
 }
@@ -562,5 +485,5 @@ private fun lightModeBrush(mode: String): Brush = when (mode) {
     "red" -> Brush.linearGradient(listOf(Color(0xFFEF4444), Color(0xFFEF4444)))
     "white" -> Brush.radialGradient(listOf(Color(0xFFFFFFFF), Color(0xFFCBD5E1)))
     "purple" -> Brush.linearGradient(listOf(Color(0xFFA855F7), Color(0xFFA855F7)))
-    else -> Brush.linearGradient(listOf(Accent, Accent))
+    else -> Brush.linearGradient(listOf(Color(0xFF38BDF8), Color(0xFF38BDF8)))
 }

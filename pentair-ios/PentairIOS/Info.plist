@@ -6,6 +6,8 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Pool</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -30,7 +32,7 @@
 		<string>_pentair._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Pentair iOS discovers and connects to your local Pentair daemon on your home network.</string>
+	<string>Pool discovers and connects to your local Pentair daemon on your home network.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>

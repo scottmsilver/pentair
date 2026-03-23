@@ -19,24 +19,46 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 18) {
+                if let system = viewModel.system {
+                    ScrollView {
+                        VStack(spacing: 18) {
+                            if let bannerMessage = viewModel.bannerMessage {
+                                bannerCard(message: bannerMessage)
+                            }
+
+                            if let pool = system.pool {
+                                poolCard(system: system, pool: pool)
+                            }
+
+                            if let spa = system.spa {
+                                spaCard(system: system, spa: spa)
+                            }
+
+                            if let lights = system.lights {
+                                lightsCard(lights: lights)
+                            }
+                        }
+                        .padding(20)
+                    }
+                    .refreshable {
+                        await viewModel.refresh()
+                    }
+                } else {
+                    VStack {
                         if let bannerMessage = viewModel.bannerMessage {
                             bannerCard(message: bannerMessage)
+                                .padding(.horizontal, 20)
+                                .padding(.top, 20)
                         }
 
-                        if let system = viewModel.system {
-                            poolCard(pool: system.pool)
-                            spaCard(spa: system.spa)
-                            lightsCard(lights: system.lights)
-                        } else {
-                            loadingCard
-                        }
+                        Spacer()
+
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(.white)
+
+                        Spacer()
                     }
-                    .padding(20)
-                }
-                .refreshable {
-                    await viewModel.refresh()
                 }
             }
             .toolbar {
@@ -72,30 +94,15 @@ struct ContentView: View {
 
     private var settingsSheet: some View {
         NavigationStack {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.04, green: 0.11, blue: 0.19),
-                        Color(red: 0.03, green: 0.20, blue: 0.30),
-                        Color(red: 0.01, green: 0.33, blue: 0.42),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
+            Form {
+                daemonSection
+                diagnosticsSection
 
-                ScrollView {
-                    VStack(spacing: 18) {
-                        addressCard
-                        diagnosticsCard
-
-                        if let system = viewModel.system {
-                            overviewCard(system: system)
-                            auxiliariesCard(auxiliaries: system.auxiliaries)
-                            pumpCard(system: system.system, pump: system.pump)
-                        }
-                    }
-                    .padding(20)
+                if let system = viewModel.system {
+                    systemSection(system.system)
+                    advancedSection(pool: system.pool)
+                    auxiliariesSection(auxiliaries: system.auxiliaries)
+                    pumpSection(system: system.system, pump: system.pump)
                 }
             }
             .navigationTitle("Settings")
@@ -105,85 +112,235 @@ struct ContentView: View {
         .presentationDragIndicator(.visible)
     }
 
-    private var addressCard: some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Daemon Address")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+    private var daemonSection: some View {
+        Section {
+            TextField("http://pool-daemon.local:8080", text: $viewModel.manualAddress)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .disabled(isBusy)
 
-                HStack(spacing: 10) {
-                    TextField("http://pool-daemon.local:8080", text: $viewModel.manualAddress)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .disabled(isBusy)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 12)
-                        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .foregroundStyle(.white)
+            Button("Test Connection") {
+                Task { await viewModel.testManualAddress() }
+            }
+            .disabled(!hasManualAddress || isBusy)
 
-                    Button("Test") {
-                        Task { await viewModel.testManualAddress() }
-                    }
-                    .buttonStyle(PoolButtonStyle(fill: Color.white.opacity(0.16)))
-                    .disabled(viewModel.manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isBusy)
+            Button("Use This Address") {
+                Task { await viewModel.applyManualAddress() }
+            }
+            .disabled(!hasManualAddress || isBusy)
 
-                    Button("Apply") {
-                        Task { await viewModel.applyManualAddress() }
-                    }
-                    .buttonStyle(PoolButtonStyle(fill: Color(red: 0.13, green: 0.76, blue: 0.79)))
-                    .disabled(viewModel.manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isBusy)
+            if let discoveredAddress = viewModel.discoveredAddress,
+               discoveredAddress != viewModel.activeAddress {
+                Button("Use Discovered Address") {
+                    Task { await viewModel.useDiscoveredAddress() }
                 }
+                .disabled(isBusy)
 
-                Text("Default daemon port is usually 8080. Use Test to verify the simulator can reach the daemon before switching over.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.62))
+                LabeledContent("Discovered") {
+                    Text(discoveredAddress)
+                        .font(.footnote.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Daemon")
+        } footer: {
+            Text("The first launch asks for Local Network access so iOS can find the daemon. Default port is usually 8080.")
+        }
+    }
 
-                Text("If your Mac SSH bridge forwards the daemon port with `-L 8080:localhost:8080`, use `http://127.0.0.1:8080` here.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.62))
+    private var diagnosticsSection: some View {
+        Section("Diagnostics") {
+            LabeledContent("State", value: viewModel.connectionState.title)
+            LabeledContent("Active", value: viewModel.activeAddress ?? "None")
+            LabeledContent("Discovered", value: viewModel.discoveredAddress ?? "None")
 
-                if let discoveredAddress = viewModel.discoveredAddress, discoveredAddress != viewModel.activeAddress {
+            if viewModel.isTestingAddress {
+                LabeledContent("Probe") {
+                    Text("Testing")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            ForEach(Array(viewModel.diagnostics.suffix(8).reversed())) { event in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.message)
+                        .font(.footnote)
+
                     HStack {
-                        Text("Discovered \(discoveredAddress)")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.70))
-
+                        Text(event.category.uppercased())
                         Spacer()
-
-                        Button("Use") {
-                            Task { await viewModel.useDiscoveredAddress() }
-                        }
-                        .buttonStyle(PoolButtonStyle(fill: Color.white.opacity(0.16)))
-                        .disabled(isBusy)
+                        Text(event.timestamp.formatted(date: .omitted, time: .standard))
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-
-                Text("The first launch will ask for Local Network access so iOS can find and talk to your daemon.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.62))
+                .padding(.vertical, 2)
             }
         }
     }
 
-    private func overviewCard(system: PoolSystem) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("System")
-                    .font(.headline)
-                    .foregroundStyle(.white)
+    private func systemSection(_ system: SystemInfo) -> some View {
+        Section("System") {
+            LabeledContent("Air") {
+                Text("\(system.airTemperature)°")
+                    .monospacedDigit()
+            }
+            LabeledContent("Controller", value: system.controller)
+            LabeledContent("Freeze Protection", value: system.freezeProtection ? "On" : "Off")
 
-                HStack(spacing: 12) {
-                    MetricPill(title: "Air", value: "\(system.system.airTemperature)°")
-                    MetricPill(title: "Controller", value: system.system.controller)
-                    MetricPill(title: "Freeze", value: system.system.freezeProtection ? "On" : "Off")
+            if let firmware = system.firmware, !firmware.isEmpty {
+                LabeledContent("Firmware", value: firmware)
+            }
+        }
+    }
+
+    private func advancedSection(pool: BodyState?) -> some View {
+        Section {
+            if let pool {
+                Toggle("Pool Circuit", isOn: poolCircuitBinding(for: pool))
+            }
+        } header: {
+            Text("Advanced")
+        } footer: {
+            Text("Most people should leave the pool circuit alone. Normal control is setpoint, spa mode, and lights.")
+        }
+    }
+
+    private func auxiliariesSection(auxiliaries: [AuxiliaryState]) -> some View {
+        Section("Auxiliaries") {
+            if auxiliaries.isEmpty {
+                Text("No auxiliary circuits are exposed by the daemon.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(auxiliaries) { auxiliary in
+                    Toggle(isOn: auxiliaryBinding(for: auxiliary)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(auxiliary.name)
+                            Text(auxiliary.id)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func pumpSection(system: SystemInfo, pump: PumpInfo?) -> some View {
+        Section("Pump") {
+            if let pump {
+                LabeledContent("Type", value: pump.pumpType)
+                LabeledContent("Status", value: pump.running ? "Running" : "Stopped")
+                LabeledContent("RPM") {
+                    Text("\(pump.rpm)")
+                        .monospacedDigit()
+                }
+                LabeledContent("Watts") {
+                    Text("\(pump.watts)")
+                        .monospacedDigit()
+                }
+                LabeledContent("Flow") {
+                    Text("\(pump.gpm) gpm")
+                        .monospacedDigit()
+                }
+            } else {
+                Text("Waiting for pump telemetry.")
+                    .foregroundStyle(.secondary)
+            }
+
+            LabeledContent("Temperature Units", value: system.tempUnit == "c" ? "Celsius" : "Fahrenheit")
+        }
+    }
+
+    private func poolCard(system: PoolSystem, pool: BodyState) -> some View {
+        bodyCard(
+            title: "Pool",
+            temperature: pool.temperature,
+            setpoint: pool.setpoint,
+            setpointAction: {
+                setpointTarget = makeSetpointTarget(
+                    id: "pool",
+                    body: "pool",
+                    title: "Pool Temperature",
+                    currentValue: pool.setpoint,
+                    range: poolSetpointRange
+                )
+            }
+        ) {
+            if let status = system.heatingStatus(for: .pool) {
+                heatingStatusText(status)
+            }
+        } controls: {
+            EmptyView()
+        }
+    }
+
+    private func spaCard(system: PoolSystem, spa: SpaState) -> some View {
+        let currentMode = viewModel.spaMode(for: spa)
+
+        return bodyCard(
+            title: "Spa",
+            temperature: spa.temperature,
+            setpoint: spa.setpoint,
+            setpointAction: {
+                setpointTarget = makeSetpointTarget(
+                    id: "spa",
+                    body: "spa",
+                    title: "Spa Temperature",
+                    currentValue: spa.setpoint,
+                    range: spaSetpointRange
+                )
+            }
+        ) {
+            if let status = system.heatingStatus(for: .spa) {
+                heatingStatusText(status)
+            }
+        } controls: {
+            HStack(spacing: 10) {
+                ForEach(SpaMode.allCases) { mode in
+                    modeButton(title: mode.title, selected: currentMode == mode) {
+                        Task { await viewModel.setSpaMode(mode) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func lightsCard(lights: LightState) -> some View {
+        PanelCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Lights")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+
+                    Spacer()
+
+                    Text(lightsStatusTitle(lights))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(lights.on ? .white : .white.opacity(0.68))
                 }
 
-                if let firmware = system.system.firmware, !firmware.isEmpty {
-                    Text("Firmware \(firmware)")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.66))
+                LazyVGrid(columns: lightGridColumns, alignment: .leading, spacing: lightGridSpacing) {
+                    LightSwatchButton(
+                        title: "Off",
+                        fill: nil,
+                        selected: !lights.on
+                    ) {
+                        Task { await viewModel.setLightMode("off") }
+                    }
+
+                    ForEach(selectableLightModes(from: lights), id: \.self) { mode in
+                        LightSwatchButton(
+                            title: lightModeLabel(mode),
+                            fill: lightModeFill(for: mode),
+                            selected: lights.on && lights.mode == mode
+                        ) {
+                            Task { await viewModel.setLightMode(mode) }
+                        }
+                    }
                 }
             }
         }
@@ -198,302 +355,6 @@ struct ContentView: View {
                 Text(message)
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.white)
-            }
-        }
-    }
-
-    private var diagnosticsCard: some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Diagnostics")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-
-                    Spacer()
-
-                    if viewModel.isTestingAddress {
-                        Text("Testing…")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color(red: 0.98, green: 0.88, blue: 0.55))
-                    }
-                }
-
-                diagnosticRow(title: "Active", value: viewModel.activeAddress ?? "none")
-                diagnosticRow(title: "Discovered", value: viewModel.discoveredAddress ?? "none")
-                diagnosticRow(title: "State", value: viewModel.connectionState.title)
-
-                ForEach(Array(viewModel.diagnostics.suffix(8).reversed())) { event in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text(event.timestamp.formatted(date: .omitted, time: .standard))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.55))
-                            .frame(width: 62, alignment: .leading)
-
-                        Text(event.category.uppercased())
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(Color(red: 0.63, green: 0.95, blue: 0.87))
-                            .frame(width: 68, alignment: .leading)
-
-                        Text(event.message)
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.82))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        }
-    }
-
-    private func diagnosticRow(title: String, value: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white.opacity(0.55))
-                .frame(width: 72, alignment: .leading)
-
-            Text(value)
-                .font(.footnote.monospaced())
-                .foregroundStyle(.white.opacity(0.82))
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func poolCard(pool: BodyState?) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Pool")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                    if let pool {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(heatingStatusTitle(pool.heating))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(heatingStatusColor(pool.heating))
-
-                            Text(poolStatusTitle(pool))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(poolStatusColor(pool))
-                        }
-                    }
-                }
-
-                if let pool {
-                    bodySummary(
-                        temperature: pool.temperature
-                    )
-
-                    setpointButton(
-                        title: "Setpoint",
-                        value: pool.setpoint,
-                        unitSymbol: temperatureUnitSymbol
-                    ) {
-                        setpointTarget = SetpointTarget(
-                            id: "pool",
-                            body: "pool",
-                            title: "Pool Temperature",
-                            currentValue: pool.setpoint,
-                            range: poolSetpointRange,
-                            unitSymbol: temperatureUnitSymbol
-                        )
-                    }
-                } else {
-                    unavailableText
-                }
-            }
-        }
-    }
-
-    private func spaCard(spa: SpaState?) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Spa")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                    Spacer()
-                    if let spa {
-                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(heatingStatusTitle(spa.heating))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(heatingStatusColor(spa.heating))
-
-                            Text(spaStatusTitle(spa))
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(spaStatusColor(spa))
-                        }
-                    }
-                }
-
-                if let spa {
-                    bodySummary(
-                        temperature: spa.temperature
-                    )
-
-                    let currentMode = viewModel.spaMode(for: spa)
-                    HStack(spacing: 10) {
-                        ForEach(SpaMode.allCases) { mode in
-                            modeButton(title: mode.title, selected: currentMode == mode) {
-                                Task { await viewModel.setSpaMode(mode) }
-                            }
-                        }
-                    }
-
-                    setpointButton(
-                        title: "Setpoint",
-                        value: spa.setpoint,
-                        unitSymbol: temperatureUnitSymbol
-                    ) {
-                        setpointTarget = SetpointTarget(
-                            id: "spa",
-                            body: "spa",
-                            title: "Spa Temperature",
-                            currentValue: spa.setpoint,
-                            range: spaSetpointRange,
-                            unitSymbol: temperatureUnitSymbol
-                        )
-                    }
-                } else {
-                    unavailableText
-                }
-            }
-        }
-    }
-
-    private func lightsCard(lights: LightState?) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Lights")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-
-                    Spacer()
-
-                    if let lights {
-                        Text(lightsStatusTitle(lights))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(lights.on ? .white : .white.opacity(0.68))
-                    }
-                }
-
-                if let lights {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHGrid(rows: lightPickerRows, spacing: 12) {
-                            LightSwatchButton(
-                                title: "Off",
-                                fill: nil,
-                                selected: !lights.on
-                            ) {
-                                Task { await viewModel.setLightMode("off") }
-                            }
-
-                            ForEach(selectableLightModes(from: lights), id: \.self) { mode in
-                                LightSwatchButton(
-                                    title: lightModeLabel(mode),
-                                    fill: lightModeFill(for: mode),
-                                    selected: lights.on && lights.mode == mode
-                                ) {
-                                    Task { await viewModel.setLightMode(mode) }
-                                }
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
-                    .frame(height: 108)
-                } else {
-                    unavailableText
-                }
-            }
-        }
-    }
-
-    private func auxiliariesCard(auxiliaries: [AuxiliaryState]) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Auxiliaries")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-
-                if auxiliaries.isEmpty {
-                    Text("No auxiliary circuits are exposed by the daemon.")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.66))
-                } else {
-                    ForEach(auxiliaries) { auxiliary in
-                        Button {
-                            Task { await viewModel.toggleAuxiliary(auxiliary) }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(auxiliary.name)
-                                        .font(.body.weight(.semibold))
-                                    Text(auxiliary.id)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.white.opacity(0.60))
-                                }
-
-                                Spacer()
-
-                                Image(systemName: auxiliary.on ? "power.circle.fill" : "power.circle")
-                                    .font(.title3)
-                                    .foregroundStyle(auxiliary.on ? Color(red: 0.59, green: 0.98, blue: 0.86) : .white.opacity(0.65))
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    private func pumpCard(system: SystemInfo, pump: PumpInfo?) -> some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Pump")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-
-                if let pump {
-                    HStack(spacing: 12) {
-                        MetricPill(title: "RPM", value: "\(pump.rpm)")
-                        MetricPill(title: "Watts", value: "\(pump.watts)")
-                        MetricPill(title: "Flow", value: "\(pump.gpm) gpm")
-                    }
-
-                    Text("\(pump.pumpType) • \(pump.running ? "Running" : "Stopped")")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.68))
-                } else {
-                    unavailableText
-                }
-
-                Text(system.tempUnit == "c" ? "Temperatures in Celsius" : "Temperatures in Fahrenheit")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.62))
-            }
-        }
-    }
-
-    private var loadingCard: some View {
-        PanelCard {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    ProgressView()
-                        .tint(.white)
-                    Text("Waiting for pool data")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                }
-
-                Text("If discovery doesn’t find the daemon, open Settings and enter the HTTP address there, for example `http://pool-daemon.local:8080`.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.70))
             }
         }
     }
@@ -529,6 +390,10 @@ struct ContentView: View {
         viewModel.isRefreshing || viewModel.isTestingAddress
     }
 
+    private var hasManualAddress: Bool {
+        !viewModel.manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var temperatureUnitSymbol: String {
         viewModel.system?.system.tempUnit == "c" ? "C" : "F"
     }
@@ -541,16 +406,15 @@ struct ContentView: View {
         temperatureUnitSymbol == "C" ? 16 ... 43 : 60 ... 110
     }
 
-    private var unavailableText: some View {
-        Text("Waiting for this part of the system to report in.")
-            .font(.footnote)
-            .foregroundStyle(.white.opacity(0.66))
-    }
+    private var lightGridSpacing: CGFloat { 12 }
 
-    private var lightPickerRows: [GridItem] {
+    private var lightGridColumns: [GridItem] {
         [
-            GridItem(.fixed(46), spacing: 12),
-            GridItem(.fixed(46), spacing: 12),
+            GridItem(
+                .adaptive(minimum: 46, maximum: 46),
+                spacing: lightGridSpacing,
+                alignment: .leading
+            ),
         ]
     }
 
@@ -560,6 +424,37 @@ struct ContentView: View {
                 .font(.system(size: 44, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
             Spacer()
+        }
+    }
+
+    private func bodyCard<StatusContent: View, ControlsContent: View>(
+        title: String,
+        temperature: Int,
+        setpoint: Int,
+        setpointAction: @escaping () -> Void,
+        @ViewBuilder status: () -> StatusContent,
+        @ViewBuilder controls: () -> ControlsContent
+    ) -> some View {
+        PanelCard {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Spacer()
+                    status()
+                }
+
+                bodySummary(temperature: temperature)
+                controls()
+
+                setpointButton(
+                    title: "Setpoint",
+                    value: setpoint,
+                    unitSymbol: temperatureUnitSymbol,
+                    action: setpointAction
+                )
+            }
         }
     }
 
@@ -590,6 +485,30 @@ struct ContentView: View {
     private func modeButton(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
             .buttonStyle(PoolButtonStyle(fill: selected ? Color(red: 0.13, green: 0.76, blue: 0.79) : Color.white.opacity(0.10)))
+    }
+
+    private func heatingStatusText(_ status: HeatingStatusSummary) -> some View {
+        Text(status.text)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(heatingStatusColor(status))
+    }
+
+    private func auxiliaryBinding(for auxiliary: AuxiliaryState) -> Binding<Bool> {
+        Binding(
+            get: { auxiliary.on },
+            set: { _ in
+                Task { await viewModel.toggleAuxiliary(auxiliary) }
+            }
+        )
+    }
+
+    private func poolCircuitBinding(for pool: BodyState) -> Binding<Bool> {
+        Binding(
+            get: { pool.on },
+            set: { isOn in
+                Task { await viewModel.setPoolMode(isOn ? .on : .off) }
+            }
+        )
     }
 
     private func modeLabel(_ rawValue: String) -> String {
@@ -648,17 +567,54 @@ struct ContentView: View {
         return preferredOrder.filter { available.contains($0) }
     }
 
+    private func makeSetpointTarget(
+        id: String,
+        body: String,
+        title: String,
+        currentValue: Int,
+        range: ClosedRange<Int>
+    ) -> SetpointTarget {
+        SetpointTarget(
+            id: id,
+            body: body,
+            title: title,
+            currentValue: currentValue,
+            range: range,
+            unitSymbol: temperatureUnitSymbol
+        )
+    }
+
+    private var whiteLightFill: AnyShapeStyle {
+        AnyShapeStyle(
+            RadialGradient(
+                colors: [Color.white, Color(red: 0.80, green: 0.85, blue: 0.90)],
+                center: .center,
+                startRadius: 2,
+                endRadius: 28
+            )
+        )
+    }
+
+    private var rainbowLightFill: AnyShapeStyle {
+        AnyShapeStyle(
+            AngularGradient(
+                colors: [
+                    Color(red: 0.94, green: 0.27, blue: 0.27),
+                    Color(red: 0.92, green: 0.67, blue: 0.03),
+                    Color(red: 0.13, green: 0.77, blue: 0.37),
+                    Color(red: 0.23, green: 0.51, blue: 0.96),
+                    Color(red: 0.66, green: 0.33, blue: 0.97),
+                    Color(red: 0.94, green: 0.27, blue: 0.27),
+                ],
+                center: .center
+            )
+        )
+    }
+
     private func lightModeFill(for mode: String) -> AnyShapeStyle {
         switch mode {
         case "on":
-            return AnyShapeStyle(
-                RadialGradient(
-                    colors: [Color.white, Color(red: 0.80, green: 0.85, blue: 0.90)],
-                    center: .center,
-                    startRadius: 2,
-                    endRadius: 28
-                )
-            )
+            return whiteLightFill
         case "set":
             return AnyShapeStyle(
                 LinearGradient(
@@ -668,19 +624,7 @@ struct ContentView: View {
                 )
             )
         case "sync":
-            return AnyShapeStyle(
-                AngularGradient(
-                    colors: [
-                        Color(red: 0.94, green: 0.27, blue: 0.27),
-                        Color(red: 0.92, green: 0.67, blue: 0.03),
-                        Color(red: 0.13, green: 0.77, blue: 0.37),
-                        Color(red: 0.23, green: 0.51, blue: 0.96),
-                        Color(red: 0.66, green: 0.33, blue: 0.97),
-                        Color(red: 0.94, green: 0.27, blue: 0.27),
-                    ],
-                    center: .center
-                )
-            )
+            return rainbowLightFill
         case "swim":
             return AnyShapeStyle(
                 AngularGradient(
@@ -696,19 +640,7 @@ struct ContentView: View {
                 )
             )
         case "party":
-            return AnyShapeStyle(
-                AngularGradient(
-                    colors: [
-                        Color(red: 0.94, green: 0.27, blue: 0.27),
-                        Color(red: 0.92, green: 0.67, blue: 0.03),
-                        Color(red: 0.13, green: 0.77, blue: 0.37),
-                        Color(red: 0.23, green: 0.51, blue: 0.96),
-                        Color(red: 0.66, green: 0.33, blue: 0.97),
-                        Color(red: 0.94, green: 0.27, blue: 0.27),
-                    ],
-                    center: .center
-                )
-            )
+            return rainbowLightFill
         case "romantic":
             return AnyShapeStyle(
                 LinearGradient(
@@ -756,14 +688,7 @@ struct ContentView: View {
         case "red":
             return AnyShapeStyle(Color(red: 0.94, green: 0.27, blue: 0.27))
         case "white":
-            return AnyShapeStyle(
-                RadialGradient(
-                    colors: [Color.white, Color(red: 0.80, green: 0.85, blue: 0.90)],
-                    center: .center,
-                    startRadius: 2,
-                    endRadius: 28
-                )
-            )
+            return whiteLightFill
         case "purple":
             return AnyShapeStyle(Color(red: 0.66, green: 0.33, blue: 0.97))
         default:
@@ -777,28 +702,17 @@ struct ContentView: View {
         }
     }
 
-    private func heatingStatusTitle(_ heating: String) -> String {
-        heating == "off" ? "Not heating" : "Heating"
-    }
-
-    private func heatingStatusColor(_ heating: String) -> Color {
-        heating == "off" ? .white.opacity(0.68) : Color(red: 1.0, green: 0.83, blue: 0.61)
-    }
-
-    private func poolStatusTitle(_ pool: BodyState) -> String {
-        pool.on ? "Running" : "Off"
-    }
-
-    private func poolStatusColor(_ pool: BodyState) -> Color {
-        return pool.on ? Color(red: 0.59, green: 0.98, blue: 0.86) : .white.opacity(0.68)
-    }
-
-    private func spaStatusTitle(_ spa: SpaState) -> String {
-        viewModel.spaMode(for: spa).title
-    }
-
-    private func spaStatusColor(_ spa: SpaState) -> Color {
-        return spa.on ? Color(red: 1.0, green: 0.83, blue: 0.61) : .white.opacity(0.68)
+    private func heatingStatusColor(_ status: HeatingStatusSummary) -> Color {
+        switch status.tone {
+        case .heating:
+            return Color(red: 1.0, green: 0.83, blue: 0.61)
+        case .neutral:
+            return .white.opacity(0.68)
+        case .warning:
+            return Color(red: 0.98, green: 0.88, blue: 0.55)
+        case .error:
+            return Color(red: 1.0, green: 0.54, blue: 0.54)
+        }
     }
 }
 
@@ -822,28 +736,6 @@ private struct PanelCard<Content: View>: View {
                         .stroke(Color.white.opacity(0.10), lineWidth: 1)
                 )
         )
-    }
-}
-
-private struct MetricPill: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.white.opacity(0.55))
-            Text(value)
-                .font(.headline)
-                .foregroundStyle(.white)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -873,11 +765,7 @@ private struct LightSwatchButton: View {
             .frame(width: 46, height: 46)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(accessibilityTitle))
-    }
-
-    private var accessibilityTitle: String {
-        title
+        .accessibilityLabel(Text(title))
     }
 }
 
@@ -927,93 +815,38 @@ private struct SetpointSheet: View {
 
     var body: some View {
         NavigationStack {
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.04, green: 0.11, blue: 0.19),
-                        Color(red: 0.03, green: 0.20, blue: 0.30),
-                        Color(red: 0.01, green: 0.33, blue: 0.42),
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .ignoresSafeArea()
-
-                VStack(spacing: 28) {
-                    Spacer(minLength: 8)
-
-                    Text(target.title)
-                        .font(.headline)
-                        .foregroundStyle(.white)
-
-                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text("\(tempValue)")
-                            .font(.system(size: 72, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+            Form {
+                Section {
+                    LabeledContent("Setpoint") {
+                        Text("\(tempValue)°\(target.unitSymbol)")
                             .monospacedDigit()
-
-                        Text("°\(target.unitSymbol)")
-                            .font(.title3.weight(.medium))
-                            .foregroundStyle(.white.opacity(0.7))
                     }
 
-                    HStack(spacing: 24) {
-                        CircleActionButton(symbol: "minus", disabled: tempValue <= target.range.lowerBound) {
-                            tempValue = max(target.range.lowerBound, tempValue - 1)
-                        }
-
-                        CircleActionButton(symbol: "plus", disabled: tempValue >= target.range.upperBound) {
-                            tempValue = min(target.range.upperBound, tempValue + 1)
-                        }
+                    Stepper(value: $tempValue, in: target.range) {
+                        Text("Adjust")
                     }
-
+                } footer: {
                     Text("Range \(target.range.lowerBound)°\(target.unitSymbol) to \(target.range.upperBound)°\(target.unitSymbol)")
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.65))
-
-                    Spacer()
-
-                    HStack(spacing: 12) {
-                        Button("Cancel") {
-                            dismiss()
-                        }
-                        .buttonStyle(PoolButtonStyle(fill: Color.white.opacity(0.10)))
-
-                        Button {
-                            onSet(tempValue)
-                            dismiss()
-                        } label: {
-                            Text("Set")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(PoolButtonStyle(fill: Color(red: 0.13, green: 0.76, blue: 0.79)))
+                }
+            }
+            .navigationTitle(target.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
                     }
                 }
-                .padding(24)
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Set") {
+                        onSet(tempValue)
+                        dismiss()
+                    }
+                }
             }
-            .navigationBarTitleDisplayMode(.inline)
         }
-        .presentationDetents([.fraction(0.46)])
+        .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
-    }
-}
-
-private struct CircleActionButton: View {
-    let symbol: String
-    let disabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 64, height: 64)
-                .background(Color.white.opacity(0.10), in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
     }
 }

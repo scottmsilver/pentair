@@ -8,11 +8,15 @@ private val PoolColorScheme = darkColorScheme(
     primary = Accent,
     secondary = Teal,
     background = PoolBackground,
-    surface = DeckGray,
+    surface = PoolSurface,
+    surfaceVariant = PoolSurfaceVariant,
+    outline = PoolOutline,
+    outlineVariant = PoolOutlineVariant,
     onPrimary = PoolBackground,
     onSecondary = PoolBackground,
     onBackground = TextBright,
     onSurface = TextBright,
+    onSurfaceVariant = TextDim,
 )
 
 @Composable

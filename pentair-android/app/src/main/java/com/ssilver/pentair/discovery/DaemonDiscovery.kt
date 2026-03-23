@@ -3,6 +3,7 @@ package com.ssilver.pentair.discovery
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -40,7 +41,11 @@ class DaemonDiscovery @Inject constructor(
                                     if (cont.isActive) cont.resume(null)
                                 }
                                 override fun onServiceResolved(si: NsdServiceInfo) {
-                                    val addr = "http://${si.host.hostAddress}:${si.port}"
+                                    val addr = resolvedAddress(si)
+                                    if (addr == null) {
+                                        if (cont.isActive) cont.resume(null)
+                                        return
+                                    }
                                     prefs.edit().putString("daemon_address", addr).apply()
                                     if (cont.isActive) cont.resume(addr)
                                     try {
@@ -67,4 +72,50 @@ class DaemonDiscovery @Inject constructor(
     fun setManualAddress(address: String) {
         prefs.edit().putString("daemon_address", address).apply()
     }
+
+    fun connectionCandidates(discoveredAddress: String?): List<String> {
+        val candidates = linkedSetOf<String>()
+        discoveredAddress?.let(candidates::add)
+        cachedAddress()?.let(candidates::add)
+
+        if (isProbablyEmulator()) {
+            candidates += "http://10.0.2.2:8080"
+        }
+
+        return candidates.toList()
+    }
+
+    private fun resolvedAddress(serviceInfo: NsdServiceInfo): String? {
+        val host = serviceInfo.host ?: return null
+        val ipv4Host = serviceInfo.hostAddresses
+            .asSequence()
+            .mapNotNull { it.hostAddress?.trim() }
+            .firstOrNull { it.isNotEmpty() && !it.contains(':') }
+
+        val namedHost = host.hostName
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != host.hostAddress }
+
+        val preferredHost = ipv4Host
+            ?: namedHost
+            ?: host.hostAddress
+            ?: return null
+
+        val urlHost = when {
+            preferredHost.contains(":") && !preferredHost.startsWith("[") -> {
+                "[${preferredHost.substringBefore('%')}]"
+            }
+            else -> preferredHost
+        }
+
+        return "http://$urlHost:${serviceInfo.port}"
+    }
+
+    private fun isProbablyEmulator(): Boolean =
+        Build.FINGERPRINT.startsWith("generic") ||
+            Build.FINGERPRINT.contains("emulator", ignoreCase = true) ||
+            Build.MODEL.contains("Emulator", ignoreCase = true) ||
+            Build.MODEL.contains("sdk_gphone", ignoreCase = true) ||
+            Build.HARDWARE.contains("ranchu", ignoreCase = true) ||
+            Build.PRODUCT.contains("sdk", ignoreCase = true)
 }

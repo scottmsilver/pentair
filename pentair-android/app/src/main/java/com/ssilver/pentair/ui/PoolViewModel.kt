@@ -15,11 +15,28 @@ class PoolViewModel @Inject constructor(
 
     val state = repository.state
     val connectionState = repository.connectionState
+    val manualAddress = repository.manualAddress
+    val discoveredAddress = repository.discoveredAddress
+    val activeAddress = repository.activeAddress
+    val isTestingAddress = repository.isTestingAddress
+    val diagnostics = repository.diagnostics
     val rejections: SharedFlow<String> = repository.rejections
 
     init {
         viewModelScope.launch { repository.connect() }
     }
+
+    fun setManualAddress(address: String) = repository.setManualAddressInput(address)
+
+    fun refresh() = viewModelScope.launch { repository.refresh() }
+
+    fun applyManualAddress() = viewModelScope.launch { repository.applyManualAddress() }
+
+    fun useDiscoveredAddress() = viewModelScope.launch { repository.useDiscoveredAddress() }
+
+    fun testManualAddress() = viewModelScope.launch { repository.testManualAddress() }
+
+    fun setPoolMode(state: String) = viewModelScope.launch { repository.setPoolMode(state) }
 
     fun setSpaState(s: String) = viewModelScope.launch { repository.setSpaState(s) }
 

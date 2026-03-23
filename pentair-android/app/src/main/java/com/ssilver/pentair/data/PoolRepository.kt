@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -26,7 +27,13 @@ import retrofit2.converter.moshi.MoshiConverterFactory
 import javax.inject.Inject
 import javax.inject.Singleton
 
-enum class ConnectionState { DISCOVERING, CONNECTED, DISCONNECTED }
+enum class ConnectionState { DISCOVERING, CONNECTING, CONNECTED, DISCONNECTED }
+
+data class DiagnosticEvent(
+    val timestampMillis: Long = System.currentTimeMillis(),
+    val category: String,
+    val message: String,
+)
 
 data class PendingChange(
     val description: String,
@@ -39,12 +46,28 @@ class PoolRepository @Inject constructor(
     private val okHttp: OkHttpClient,
     private val discovery: DaemonDiscovery,
 ) : DefaultLifecycleObserver {
+    private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
 
     private val _state = MutableStateFlow<PoolSystem?>(null)
     val state: StateFlow<PoolSystem?> = _state.asStateFlow()
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCOVERING)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    private val _manualAddress = MutableStateFlow(discovery.cachedAddress().orEmpty())
+    val manualAddress: StateFlow<String> = _manualAddress.asStateFlow()
+
+    private val _discoveredAddress = MutableStateFlow<String?>(null)
+    val discoveredAddress: StateFlow<String?> = _discoveredAddress.asStateFlow()
+
+    private val _activeAddress = MutableStateFlow(discovery.cachedAddress())
+    val activeAddress: StateFlow<String?> = _activeAddress.asStateFlow()
+
+    private val _isTestingAddress = MutableStateFlow(false)
+    val isTestingAddress: StateFlow<Boolean> = _isTestingAddress.asStateFlow()
+
+    private val _diagnostics = MutableStateFlow<List<DiagnosticEvent>>(emptyList())
+    val diagnostics: StateFlow<List<DiagnosticEvent>> = _diagnostics.asStateFlow()
 
     private val _pendingChanges = mutableListOf<PendingChange>()
     private val _rejections = MutableSharedFlow<String>(extraBufferCapacity = 5)
@@ -56,6 +79,16 @@ class PoolRepository @Inject constructor(
     private var reconnectDelay = 1000L
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateLock = Any()
+
+    init {
+        discovery.cachedAddress()?.let { cached ->
+            recordDiagnostic("startup", "Loaded cached daemon address $cached")
+        }
+    }
+
+    fun setManualAddressInput(address: String) {
+        _manualAddress.value = address
+    }
 
     private fun applyOptimistic(
         description: String,
@@ -72,46 +105,40 @@ class PoolRepository @Inject constructor(
     suspend fun connect() {
         while (true) {
             _connectionState.value = ConnectionState.DISCOVERING
-            val addr = discovery.discover()
-            android.util.Log.d("PoolRepo", "Discovery result: $addr")
-            if (addr == null) {
-                android.util.Log.e("PoolRepo", "No daemon found — retrying in ${reconnectDelay}ms")
+            recordDiagnostic("discovery", "Searching for daemon")
+            val discoveredAddress = discovery.discover()
+            if (discoveredAddress != null) {
+                _discoveredAddress.value = discoveredAddress
+                if (_manualAddress.value.isBlank() || _manualAddress.value == _activeAddress.value) {
+                    _manualAddress.value = discoveredAddress
+                }
+            }
+
+            val candidates = discovery.connectionCandidates(discoveredAddress)
+            if (candidates.isEmpty()) {
+                recordDiagnostic("discovery", "No daemon found")
                 _connectionState.value = ConnectionState.DISCONNECTED
                 delay(reconnectDelay)
                 reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
                 continue
             }
-            android.util.Log.d("PoolRepo", "Connecting to daemon at $addr")
-            baseUrl = addr
-            val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
-            api = Retrofit.Builder()
-                .baseUrl(addr)
-                .client(okHttp)
-                .addConverterFactory(MoshiConverterFactory.create(moshi))
-                .build()
-                .create(PoolApiClient::class.java)
 
-            // Retry initial fetch — network may not be ready immediately after launch
-            var connected = false
-            for (attempt in 1..3) {
-                try {
-                    val result = api?.getPool() ?: throw Exception("API not ready")
-                    android.util.Log.d("PoolRepo", "Connected on attempt $attempt: pool=${result.pool?.temperature}°F")
-                    synchronized(stateLock) { _state.value = result }
-                    _connectionState.value = ConnectionState.CONNECTED
-                    reconnectDelay = 1000L
-                    connectWebSocket()
-                    connected = true
-                    break
-                } catch (e: Exception) {
-                    android.util.Log.w("PoolRepo", "Connect attempt $attempt/3 failed: ${e.message}")
-                    if (attempt < 3) delay(2000L * attempt)
-                }
+            if (discoveredAddress == null) {
+                recordDiagnostic(
+                    "discovery",
+                    "NSD found nothing; probing ${candidates.joinToString()}"
+                )
             }
-            if (connected) return
+
+            for (candidate in candidates) {
+                if (candidate != discoveredAddress) {
+                    recordDiagnostic("probe", "Trying fallback daemon address $candidate")
+                }
+                if (tryConnect(candidate)) return
+            }
 
             // All fetch attempts failed — back off and retry discovery
-            android.util.Log.e("PoolRepo", "All connect attempts failed, retrying in ${reconnectDelay}ms")
+            recordDiagnostic("http", "All connect attempts failed for ${candidates.joinToString()}")
             _connectionState.value = ConnectionState.DISCONNECTED
             delay(reconnectDelay)
             reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
@@ -119,22 +146,81 @@ class PoolRepository @Inject constructor(
     }
 
     suspend fun refresh() {
+        val address = _activeAddress.value ?: return
+
         try {
-            android.util.Log.d("PoolRepo", "Refreshing from ${baseUrl}/api/pool")
+            ensureApi(address)
+            recordDiagnostic("http", "GET $address/api/pool")
             val result = api?.getPool()
-            android.util.Log.d("PoolRepo", "Got pool data: pool=${result?.pool?.temperature}°F spa=${result?.spa?.temperature}°F")
             synchronized(stateLock) {
                 _state.value = result
             }
             _connectionState.value = ConnectionState.CONNECTED
             reconnectDelay = 1000L
+            recordDiagnostic("http", "GET /api/pool succeeded")
 
             if (result != null) {
                 reconcilePendingChanges(result)
             }
         } catch (e: Exception) {
-            android.util.Log.e("PoolRepo", "Refresh failed: ${e.message}", e)
+            recordDiagnostic("http", "GET /api/pool failed: ${e.message}")
             _connectionState.value = ConnectionState.DISCONNECTED
+        }
+    }
+
+    suspend fun applyManualAddress() {
+        val address = normalizeAddress(_manualAddress.value)
+        if (address == null) {
+            _rejections.tryEmit("Invalid address")
+            recordDiagnostic("probe", "Rejected invalid manual address '${_manualAddress.value}'")
+            return
+        }
+
+        _manualAddress.value = address
+        discovery.setManualAddress(address)
+        recordDiagnostic("probe", "Applying manual daemon address $address")
+
+        if (!tryConnect(address)) {
+            _rejections.tryEmit("Couldn't connect to $address")
+            _connectionState.value = ConnectionState.DISCONNECTED
+        }
+    }
+
+    suspend fun useDiscoveredAddress() {
+        val address = _discoveredAddress.value ?: return
+        _manualAddress.value = address
+        discovery.setManualAddress(address)
+        recordDiagnostic("probe", "Using discovered daemon address $address")
+
+        if (!tryConnect(address)) {
+            _rejections.tryEmit("Couldn't connect to $address")
+            _connectionState.value = ConnectionState.DISCONNECTED
+        }
+    }
+
+    suspend fun testManualAddress() {
+        val candidate = _manualAddress.value.ifBlank { _activeAddress.value.orEmpty() }
+        val address = normalizeAddress(candidate)
+        if (address == null) {
+            _rejections.tryEmit("Invalid address")
+            recordDiagnostic("probe", "Rejected invalid probe address '$candidate'")
+            return
+        }
+
+        _isTestingAddress.value = true
+        recordDiagnostic("probe", "Testing $address/api/pool")
+        try {
+            val result = buildApi(address).getPool()
+            recordDiagnostic(
+                "probe",
+                "Success. Controller ${result.system.controller}, air ${result.system.air_temperature}°"
+            )
+            _rejections.tryEmit("Connection OK: $address")
+        } catch (e: Exception) {
+            recordDiagnostic("probe", "Failed: ${e.message}")
+            _rejections.tryEmit(e.message ?: "Connection failed")
+        } finally {
+            _isTestingAddress.value = false
         }
     }
 
@@ -145,16 +231,11 @@ class PoolRepository @Inject constructor(
             while (iterator.hasNext()) {
                 val change = iterator.next()
                 if (change.verify(serverState)) {
-                    // Server confirmed the change — remove silently
-                    android.util.Log.d("PoolRepo", "Confirmed: ${change.description}")
                     iterator.remove()
                 } else if (now - change.appliedAt > 5000) {
-                    // Grace period elapsed and server doesn't reflect the change — reject
-                    android.util.Log.w("PoolRepo", "Rejected: ${change.description}")
                     _rejections.tryEmit("${change.description} didn't take effect")
                     iterator.remove()
                 }
-                // else: still within grace period, leave it pending
             }
         }
     }
@@ -168,6 +249,7 @@ class PoolRepository @Inject constructor(
             }
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 _connectionState.value = ConnectionState.DISCONNECTED
+                recordDiagnostic("websocket", "WebSocket failed: ${t.message}")
                 scope.launch {
                     delay(reconnectDelay)
                     reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
@@ -176,8 +258,10 @@ class PoolRepository @Inject constructor(
             }
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
                 _connectionState.value = ConnectionState.DISCONNECTED
+                recordDiagnostic("websocket", "WebSocket closed")
             }
         })
+        recordDiagnostic("websocket", "Connected to $wsUrl")
     }
 
     // Lifecycle: disconnect WS on background, reconnect on foreground
@@ -200,6 +284,25 @@ class PoolRepository @Inject constructor(
     }
 
     // Action methods
+    suspend fun setPoolMode(state: String) {
+        val turnOn = state == "on"
+        applyOptimistic(
+            description = "Pool ${if (turnOn) "on" else "off"}",
+            mutate = { sys -> sys.copy(pool = sys.pool?.copy(on = turnOn)) },
+            verify = { sys -> sys.pool?.on == turnOn },
+        )
+
+        try {
+            if (turnOn) api?.poolOn() else api?.poolOff()
+        } catch (e: Exception) {
+            _rejections.tryEmit("Pool ${state} failed: ${e.message}")
+            try { refresh() } catch (_: Exception) {}
+            return
+        }
+        delay(1000)
+        refresh()
+    }
+
     suspend fun setSpaState(state: String) {
         val preMutationSpa = _state.value?.spa  // capture BEFORE applyOptimistic
 
@@ -326,5 +429,75 @@ class PoolRepository @Inject constructor(
         }
         delay(1000)
         refresh()
+    }
+
+    private fun recordDiagnostic(category: String, message: String) {
+        android.util.Log.d("PoolRepo", "[$category] $message")
+        _diagnostics.value = (_diagnostics.value + DiagnosticEvent(category = category, message = message))
+            .takeLast(40)
+    }
+
+    private suspend fun tryConnect(address: String): Boolean {
+        ensureApi(address)
+        _connectionState.value = ConnectionState.CONNECTING
+        recordDiagnostic("startup", "Active daemon address set to $address")
+
+        for (attempt in 1..3) {
+            try {
+                recordDiagnostic("http", "GET $address/api/pool")
+                val result = api?.getPool() ?: throw IllegalStateException("API not ready")
+                synchronized(stateLock) { _state.value = result }
+                _connectionState.value = ConnectionState.CONNECTED
+                reconnectDelay = 1000L
+                recordDiagnostic("http", "GET /api/pool succeeded")
+                connectWebSocket()
+                reconcilePendingChanges(result)
+                return true
+            } catch (e: Exception) {
+                recordDiagnostic("http", "Connect attempt $attempt failed: ${e.message}")
+                if (attempt < 3) delay(2000L * attempt)
+            }
+        }
+
+        return false
+    }
+
+    private fun ensureApi(address: String) {
+        if (address == baseUrl && api != null) return
+        webSocket?.close(1000, "switching")
+        webSocket = null
+        baseUrl = address
+        _activeAddress.value = address
+        api = buildApi(address)
+    }
+
+    private fun buildApi(address: String): PoolApiClient {
+        val retrofitBase = if (address.endsWith("/")) address else "$address/"
+        return Retrofit.Builder()
+            .baseUrl(retrofitBase)
+            .client(okHttp)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(PoolApiClient::class.java)
+    }
+
+    private fun normalizeAddress(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return null
+
+        val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            "http://$trimmed"
+        }
+
+        val parsed = withScheme.toHttpUrlOrNull() ?: return null
+        return parsed.newBuilder()
+            .encodedPath("/")
+            .query(null)
+            .fragment(null)
+            .build()
+            .toString()
+            .removeSuffix("/")
     }
 }

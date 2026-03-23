@@ -1,51 +1,73 @@
 package com.ssilver.pentair.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ssilver.pentair.data.AuxState
+import com.ssilver.pentair.data.BodyState
 import com.ssilver.pentair.data.ConnectionState
+import com.ssilver.pentair.data.DiagnosticEvent
 import com.ssilver.pentair.data.PumpInfo
 import com.ssilver.pentair.data.SystemInfo
 import com.ssilver.pentair.ui.theme.Accent
 import com.ssilver.pentair.ui.theme.TextBright
 import com.ssilver.pentair.ui.theme.TextDim
 import com.ssilver.pentair.ui.theme.TextFaint
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDrawer(
     auxiliaries: List<AuxState>,
     system: SystemInfo?,
+    pool: BodyState?,
     pump: PumpInfo?,
     connectionState: ConnectionState,
+    manualAddress: String,
+    discoveredAddress: String?,
+    activeAddress: String?,
+    isTestingAddress: Boolean,
+    diagnostics: List<DiagnosticEvent>,
     useClassicUi: Boolean,
+    onManualAddressChange: (String) -> Unit,
+    onApplyManualAddress: () -> Unit,
+    onUseDiscoveredAddress: () -> Unit,
+    onTestConnection: () -> Unit,
     onUseClassicUiChange: (Boolean) -> Unit,
+    onPoolCircuitChange: (Boolean) -> Unit,
     onAuxToggle: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -54,194 +76,280 @@ fun SettingsDrawer(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF1E293B),
-        dragHandle = {
-            Box(
-                modifier = Modifier
-                    .padding(top = 8.dp, bottom = 12.dp)
-                    .size(width = 36.dp, height = 4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.2f)),
-            )
-        },
     ) {
         Column(
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 20.dp),
+                .padding(bottom = 24.dp),
         ) {
-            // Auxiliaries
-            if (auxiliaries.isNotEmpty()) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 10.dp),
-                ) {
-                    auxiliaries.forEach { aux ->
-                        val isOn = aux.on
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(
-                                    if (isOn) Accent.copy(alpha = 0.12f)
-                                    else Color.White.copy(alpha = 0.04f)
-                                )
-                                .border(
-                                    width = 1.dp,
-                                    color = if (isOn) Accent.copy(alpha = 0.3f)
-                                    else Color.White.copy(alpha = 0.06f),
-                                    shape = RoundedCornerShape(16.dp),
-                                )
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                ) { onAuxToggle(aux.id, !aux.on) }
-                                .padding(vertical = 14.dp, horizontal = 6.dp),
-                        ) {
-                            Text(
-                                text = aux.name,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isOn) Accent else TextDim,
-                            )
-                        }
-                    }
-                }
+            SectionTitle("Daemon")
 
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.06f),
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-            }
-
-            Text(
-                text = "Interface",
-                fontSize = 12.sp,
-                color = TextFaint,
-                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            OutlinedTextField(
+                value = manualAddress,
+                onValueChange = onManualAddressChange,
+                singleLine = true,
+                label = { Text("Address") },
+                placeholder = { Text("http://pool-daemon.local:8080") },
+                colors = drawerFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
             )
 
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    ViewModeChip(
-                        label = "Modern",
-                        selected = !useClassicUi,
-                        onClick = { onUseClassicUiChange(false) },
-                    )
+                Button(
+                    onClick = onTestConnection,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(if (isTestingAddress) "Testing..." else "Test Connection")
                 }
-                Box(modifier = Modifier.weight(1f)) {
-                    ViewModeChip(
-                        label = "Classic",
-                        selected = useClassicUi,
-                        onClick = { onUseClassicUiChange(true) },
-                    )
+
+                Button(
+                    onClick = onApplyManualAddress,
+                    enabled = manualAddress.isNotBlank(),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text("Use This Address")
                 }
             }
 
-            HorizontalDivider(
-                color = Color.White.copy(alpha = 0.06f),
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
+            if (discoveredAddress != null && discoveredAddress != activeAddress) {
+                TextButton(
+                    onClick = onUseDiscoveredAddress,
+                    modifier = Modifier.align(Alignment.Start),
+                ) {
+                    Text("Use Discovered Address")
+                }
+            }
 
-            // Tech info rows
-            TechRow(
-                label = "Status",
-                value = when (connectionState) {
-                    ConnectionState.CONNECTED -> "Connected"
-                    ConnectionState.DISCONNECTED -> "Disconnected"
-                    ConnectionState.DISCOVERING -> "Discovering\u2026"
-                },
-            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            SectionTitle("Diagnostics")
+            TechRow("State", connectionStateLabel(connectionState))
+            TechRow("Active", activeAddress ?: "None")
+            TechRow("Discovered", discoveredAddress ?: "None")
+
+            if (isTestingAddress) {
+                TechRow("Probe", "Testing")
+            }
+
+            diagnostics.takeLast(8).asReversed().forEach { event ->
+                DiagnosticRow(event)
+            }
 
             if (system != null) {
-                TechRow(label = "Equipment Pad", value = "${system.air_temperature}\u00B0F")
-                TechRow(label = "Controller", value = system.controller)
-                TechRow(label = "Firmware", value = system.firmware ?: "--")
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                SectionTitle("System")
+                TechRow("Air", "${system.air_temperature}°")
+                TechRow("Controller", system.controller)
+                TechRow("Freeze Protection", if (system.freeze_protection) "On" else "Off")
+                system.firmware?.takeIf { it.isNotBlank() }?.let { firmware ->
+                    TechRow("Firmware", firmware)
+                }
             }
 
-            if (pump != null) {
-                TechRow(
-                    label = "Pump",
-                    value = pump.pump_type + if (pump.running) " (running)" else " (off)",
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            SectionTitle("Advanced")
+            if (pool != null) {
+                ToggleRow(
+                    title = "Pool Circuit",
+                    checked = pool.on,
+                    onCheckedChange = onPoolCircuitChange,
                 )
-                if (pump.running) {
-                    TechRow(label = "RPM", value = "${pump.rpm} RPM")
-                    TechRow(label = "Power", value = "${pump.watts}W")
-                    TechRow(label = "Flow", value = "${pump.gpm} GPM")
-                } else {
-                    TechRow(label = "RPM", value = "\u2014")
-                    TechRow(label = "Power", value = "\u2014")
-                    TechRow(label = "Flow", value = "\u2014")
+            }
+            Text(
+                text = "Most people should leave the pool circuit alone. Normal control is setpoint, spa mode, and lights.",
+                fontSize = 12.sp,
+                color = TextFaint,
+            )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            SectionTitle("Auxiliaries")
+            if (auxiliaries.isEmpty()) {
+                Text(
+                    text = "No auxiliary circuits are exposed by the daemon.",
+                    fontSize = 13.sp,
+                    color = TextDim,
+                )
+            } else {
+                auxiliaries.forEach { aux ->
+                    ToggleRow(
+                        title = aux.name,
+                        subtitle = aux.id,
+                        checked = aux.on,
+                        onCheckedChange = { onAuxToggle(aux.id, it) },
+                    )
                 }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            SectionTitle("Pump")
+            if (pump != null) {
+                TechRow("Type", pump.pump_type)
+                TechRow("Status", if (pump.running) "Running" else "Stopped")
+                TechRow("RPM", "${pump.rpm}")
+                TechRow("Watts", "${pump.watts}")
+                TechRow("Flow", "${pump.gpm} gpm")
+            } else {
+                Text(
+                    text = "Waiting for pump telemetry.",
+                    fontSize = 13.sp,
+                    color = TextDim,
+                )
+            }
+            system?.let {
+                TechRow("Temperature Units", if (it.temp_unit == "c") "Celsius" else "Fahrenheit")
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            SectionTitle("Interface")
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                SegmentedButton(
+                    selected = !useClassicUi,
+                    onClick = { onUseClassicUiChange(false) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    label = { Text("Modern") },
+                )
+                SegmentedButton(
+                    selected = useClassicUi,
+                    onClick = { onUseClassicUiChange(true) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    label = { Text("Classic") },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ViewModeChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
+private fun SectionTitle(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun ToggleRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    subtitle: String? = null,
 ) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(
-                if (selected) Accent.copy(alpha = 0.14f)
-                else Color.White.copy(alpha = 0.04f)
+    ListItem(
+        headlineContent = {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
             )
-            .border(
-                width = 1.dp,
-                color = if (selected) Accent.copy(alpha = 0.32f)
-                else Color.White.copy(alpha = 0.06f),
-                shape = RoundedCornerShape(16.dp),
+        },
+        supportingContent = subtitle?.let {
+            {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
             )
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-                onClick = onClick,
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun DiagnosticRow(event: DiagnosticEvent) {
+    ListItem(
+        headlineContent = {
+            Text(
+                text = event.message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            .padding(vertical = 14.dp),
-    ) {
-        Text(
-            text = label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (selected) Accent else TextDim,
-        )
-    }
+        },
+        supportingContent = {
+            Text(
+                text = event.category.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = {
+            Text(
+                text = formatDiagnosticTime(event.timestampMillis),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
 private fun TechRow(label: String, value: String) {
-    Row(
-        horizontalArrangement = Arrangement.SpaceBetween,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-    ) {
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            color = TextFaint,
-        )
-        Text(
-            text = value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = TextDim,
-        )
-    }
+    ListItem(
+        headlineContent = {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+        trailingContent = {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+        },
+        colors = ListItemDefaults.colors(
+            containerColor = Color.Transparent,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun drawerFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = TextBright,
+    unfocusedTextColor = TextBright,
+    focusedBorderColor = Accent,
+    unfocusedBorderColor = Color.White.copy(alpha = 0.18f),
+    focusedLabelColor = Accent,
+    unfocusedLabelColor = TextDim,
+    focusedPlaceholderColor = TextFaint,
+    unfocusedPlaceholderColor = TextFaint,
+    cursorColor = Accent,
+    focusedContainerColor = Color.Transparent,
+    unfocusedContainerColor = Color.Transparent,
+)
+
+private fun connectionStateLabel(connectionState: ConnectionState): String = when (connectionState) {
+    ConnectionState.CONNECTED -> "Connected"
+    ConnectionState.CONNECTING -> "Connecting"
+    ConnectionState.DISCONNECTED -> "Disconnected"
+    ConnectionState.DISCOVERING -> "Searching"
+}
+
+private fun formatDiagnosticTime(timestampMillis: Long): String {
+    val formatter = SimpleDateFormat("h:mm:ss a", Locale.US)
+    return formatter.format(Date(timestampMillis))
 }
