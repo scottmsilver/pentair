@@ -13,3 +13,11 @@ pentair-android/.gradle/
 pentair-android/build/
 pentair-android/app/build/
 pentair-android/local.properties
+
+# iOS / Xcode
+DerivedData/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+pentair-ios/PentairIOS.xcodeproj/xcuserdata/
+pentair-ios/PentairIOS.xcodeproj/project.xcworkspace/xcuserdata/

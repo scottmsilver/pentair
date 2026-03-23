@@ -5,6 +5,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -17,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,11 +26,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.ssilver.pentair.data.LightState
 
 private data class LightMode(
@@ -63,6 +66,35 @@ private fun getModebrush(mode: String): Brush? {
 }
 
 @Composable
+private fun BulbIcon(
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val strokeWidth = w * 0.09f
+        val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+
+        // Bulb glass shape
+        val bulbPath = Path().apply {
+            moveTo(w * 0.38f, h * 0.68f)
+            lineTo(w * 0.32f, h * 0.52f)
+            cubicTo(w * 0.12f, h * 0.42f, w * 0.12f, h * 0.12f, w * 0.5f, h * 0.08f)
+            cubicTo(w * 0.88f, h * 0.12f, w * 0.88f, h * 0.42f, w * 0.68f, h * 0.52f)
+            lineTo(w * 0.62f, h * 0.68f)
+            close()
+        }
+        drawPath(bulbPath, color = color, style = stroke)
+
+        // Base screw lines
+        drawLine(color, Offset(w * 0.36f, h * 0.74f), Offset(w * 0.64f, h * 0.74f), strokeWidth)
+        drawLine(color, Offset(w * 0.39f, h * 0.82f), Offset(w * 0.61f, h * 0.82f), strokeWidth)
+        drawLine(color, Offset(w * 0.44f, h * 0.89f), Offset(w * 0.56f, h * 0.89f), strokeWidth)
+    }
+}
+
+@Composable
 fun LightPicker(
     lights: LightState?,
     onModeSelect: (String) -> Unit,
@@ -86,18 +118,18 @@ fun LightPicker(
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .size(24.dp)
+                .size(44.dp)
                 .clip(CircleShape)
                 .then(
                     if (selectorBrush != null) {
                         Modifier.background(selectorBrush, CircleShape)
                     } else {
-                        Modifier.background(Color.Transparent, CircleShape)
+                        Modifier.background(Color(0xFF0A0A0A), CircleShape)
                     }
                 )
                 .border(
                     width = 2.dp,
-                    color = if (lightsOn) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.25f),
+                    color = if (lightsOn) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.15f),
                     shape = CircleShape,
                 )
                 .clickable(
@@ -106,10 +138,9 @@ fun LightPicker(
                 ) { expanded = !expanded },
         ) {
             if (!lightsOn || currentMode == null) {
-                Text(
-                    text = "\u23FB", // Power symbol
-                    fontSize = 12.sp,
-                    color = Color.White.copy(alpha = 0.35f),
+                BulbIcon(
+                    color = Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.size(24.dp),
                 )
             }
         }
@@ -125,15 +156,20 @@ fun LightPicker(
                     .horizontalScroll(rememberScrollState())
                     .weight(1f, fill = false),
             ) {
-                Spacer(Modifier.width(5.dp))
+                Spacer(Modifier.width(8.dp))
 
-                // Off swatch
+                // Off swatch — dark bulb
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .size(20.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.08f), CircleShape)
+                        .background(Color(0xFF0A0A0A), CircleShape)
+                        .border(
+                            width = 1.dp,
+                            color = Color.White.copy(alpha = 0.12f),
+                            shape = CircleShape,
+                        )
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null,
@@ -142,20 +178,19 @@ fun LightPicker(
                             expanded = false
                         },
                 ) {
-                    Text(
-                        text = "\u23FB",
-                        fontSize = 10.sp,
-                        color = Color.White.copy(alpha = 0.4f),
+                    BulbIcon(
+                        color = Color.White.copy(alpha = 0.3f),
+                        modifier = Modifier.size(20.dp),
                     )
                 }
 
                 // Color swatches
                 lightModes.forEach { mode ->
-                    Spacer(Modifier.width(5.dp))
+                    Spacer(Modifier.width(6.dp))
                     val isSelected = currentMode == mode.key
                     Box(
                         modifier = Modifier
-                            .size(20.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
                             .background(mode.brush, CircleShape)
                             .then(

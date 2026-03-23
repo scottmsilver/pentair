@@ -71,10 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         bind_port,
         None,
     )
-    .expect("failed to create mDNS service");
+    .expect("failed to create mDNS service")
+    .enable_addr_auto();
     mdns.register(service_info)
         .expect("failed to register mDNS service");
-    info!("mDNS: advertising _pentair._tcp on port {}", bind_port);
+    info!("mDNS: advertising _pentair._tcp on port {} as {}.local.", bind_port, hostname);
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())

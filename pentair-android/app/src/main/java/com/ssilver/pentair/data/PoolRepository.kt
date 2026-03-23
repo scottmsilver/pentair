@@ -70,26 +70,52 @@ class PoolRepository @Inject constructor(
     }
 
     suspend fun connect() {
-        _connectionState.value = ConnectionState.DISCOVERING
-        val addr = discovery.discover() ?: discovery.cachedAddress()
-        android.util.Log.d("PoolRepo", "Discovery result: $addr")
-        if (addr == null) {
-            android.util.Log.e("PoolRepo", "No daemon found — discovery returned null")
-            _connectionState.value = ConnectionState.DISCONNECTED
-            return
-        }
-        android.util.Log.d("PoolRepo", "Connecting to daemon at $addr")
-        baseUrl = addr
-        val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
-        api = Retrofit.Builder()
-            .baseUrl(addr)
-            .client(okHttp)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .build()
-            .create(PoolApiClient::class.java)
+        while (true) {
+            _connectionState.value = ConnectionState.DISCOVERING
+            val addr = discovery.discover()
+            android.util.Log.d("PoolRepo", "Discovery result: $addr")
+            if (addr == null) {
+                android.util.Log.e("PoolRepo", "No daemon found — retrying in ${reconnectDelay}ms")
+                _connectionState.value = ConnectionState.DISCONNECTED
+                delay(reconnectDelay)
+                reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
+                continue
+            }
+            android.util.Log.d("PoolRepo", "Connecting to daemon at $addr")
+            baseUrl = addr
+            val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+            api = Retrofit.Builder()
+                .baseUrl(addr)
+                .client(okHttp)
+                .addConverterFactory(MoshiConverterFactory.create(moshi))
+                .build()
+                .create(PoolApiClient::class.java)
 
-        refresh()
-        connectWebSocket()
+            // Retry initial fetch — network may not be ready immediately after launch
+            var connected = false
+            for (attempt in 1..3) {
+                try {
+                    val result = api?.getPool() ?: throw Exception("API not ready")
+                    android.util.Log.d("PoolRepo", "Connected on attempt $attempt: pool=${result.pool?.temperature}°F")
+                    synchronized(stateLock) { _state.value = result }
+                    _connectionState.value = ConnectionState.CONNECTED
+                    reconnectDelay = 1000L
+                    connectWebSocket()
+                    connected = true
+                    break
+                } catch (e: Exception) {
+                    android.util.Log.w("PoolRepo", "Connect attempt $attempt/3 failed: ${e.message}")
+                    if (attempt < 3) delay(2000L * attempt)
+                }
+            }
+            if (connected) return
+
+            // All fetch attempts failed — back off and retry discovery
+            android.util.Log.e("PoolRepo", "All connect attempts failed, retrying in ${reconnectDelay}ms")
+            _connectionState.value = ConnectionState.DISCONNECTED
+            delay(reconnectDelay)
+            reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
+        }
     }
 
     suspend fun refresh() {

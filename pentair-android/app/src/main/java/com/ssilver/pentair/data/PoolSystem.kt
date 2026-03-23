@@ -15,6 +15,7 @@ data class PoolSystem(
 @JsonClass(generateAdapter = true)
 data class BodyState(
     val on: Boolean,
+    val active: Boolean = false,
     val temperature: Int,
     val setpoint: Int,
     val heat_mode: String,
@@ -24,6 +25,7 @@ data class BodyState(
 @JsonClass(generateAdapter = true)
 data class SpaState(
     val on: Boolean,
+    val active: Boolean = false,
     val temperature: Int,
     val setpoint: Int,
     val heat_mode: String,

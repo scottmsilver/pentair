@@ -1,13 +1,24 @@
 package com.ssilver.pentair.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -17,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,6 +36,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.ssilver.pentair.data.ConnectionState
 import com.ssilver.pentair.ui.theme.PoolBackground
 import com.ssilver.pentair.ui.theme.TextDim
 
@@ -42,6 +55,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
     var showSettings by remember { mutableStateOf(false) }
     var showPoolSetpoint by remember { mutableStateOf(false) }
     var showSpaSetpoint by remember { mutableStateOf(false) }
+    var useClassicUi by rememberSaveable { mutableStateOf(false) }
 
     val system = poolSystem
     val pool = system?.pool
@@ -61,45 +75,106 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             .fillMaxSize()
             .background(PoolBackground),
     ) {
-        // Pool visual - fills screen width
-        PoolVisualCanvas(
-            pool = pool,
-            spa = spa,
-            lights = lights,
-            spaState = spaState,
-            onPoolSetpointClick = { showPoolSetpoint = true },
-            onSpaSetpointClick = { showSpaSetpoint = true },
-            onSpaStateChange = { viewModel.setSpaState(it) },
-            onLightModeSelect = { viewModel.setLightMode(it) },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 10.dp, end = 10.dp, top = 44.dp),
-        )
+        // Loading state — shown until first data arrives
+        AnimatedVisibility(
+            visible = system == null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    CircularProgressIndicator(
+                        color = TextDim,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(32.dp),
+                    )
+                    Text(
+                        text = if (connectionState == ConnectionState.DISCOVERING)
+                            "Finding pool system\u2026"
+                        else
+                            "Connecting\u2026",
+                        fontSize = 14.sp,
+                        color = TextDim,
+                    )
+                }
+            }
+        }
+
+        // Main content — shown once data is loaded
+        AnimatedVisibility(
+            visible = system != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            if (useClassicUi) {
+                PoolVisualCanvas(
+                    pool = pool,
+                    spa = spa,
+                    lights = lights,
+                    spaState = spaState,
+                    onPoolSetpointClick = { showPoolSetpoint = true },
+                    onSpaSetpointClick = { showSpaSetpoint = true },
+                    onSpaStateChange = { viewModel.setSpaState(it) },
+                    onLightModeSelect = { viewModel.setLightMode(it) },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.systemBars)
+                        .padding(start = 28.dp, end = 28.dp, top = 24.dp, bottom = 20.dp),
+                )
+            } else {
+                PoolModernScreen(
+                    pool = pool,
+                    spa = spa,
+                    lights = lights,
+                    systemInfo = system?.system,
+                    connectionState = connectionState,
+                    spaState = spaState,
+                    onShowSettings = { showSettings = true },
+                    onPoolSetpointClick = { showPoolSetpoint = true },
+                    onSpaStateChange = { viewModel.setSpaState(it) },
+                    onSpaSetpointClick = { showSpaSetpoint = true },
+                    onLightModeSelect = { viewModel.setLightMode(it) },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .windowInsetsPadding(WindowInsets.systemBars),
+                )
+            }
+        }
 
         // Gear icon — top right, outside the pool visual (matches web UI)
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 40.dp, end = 8.dp)
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { showSettings = true },
-        ) {
-            Text(
-                text = "\u2699",
-                fontSize = 22.sp,
-                color = TextDim,
-            )
+        if (system != null && useClassicUi) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(top = 16.dp, end = 20.dp)
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { showSettings = true },
+            ) {
+                Text(
+                    text = "\u2699",
+                    fontSize = 22.sp,
+                    color = TextDim,
+                )
+            }
         }
 
         SnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(bottom = 16.dp),
         )
     }
@@ -111,6 +186,8 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             system = system.system,
             pump = system.pump,
             connectionState = connectionState,
+            useClassicUi = useClassicUi,
+            onUseClassicUiChange = { useClassicUi = it },
             onAuxToggle = { id, on -> viewModel.toggleAux(id, on) },
             onDismiss = { showSettings = false },
         )

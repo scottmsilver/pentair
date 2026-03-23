@@ -28,7 +28,12 @@ pub struct PoolSystem {
 /// Pool body — on/off, temperature, heating.
 #[derive(Debug, Clone, Serialize)]
 pub struct BodyState {
+    /// Circuit is commanded on by the controller.
     pub on: bool,
+    /// Water is actually flowing (circuit on AND pump running with RPM > 0).
+    /// When `on` is true but `active` is false, the circuit was just turned on
+    /// and the pump hasn't ramped up yet, or something is wrong.
+    pub active: bool,
     pub temperature: i32,
     pub setpoint: i32,
     pub heat_mode: String,
@@ -38,7 +43,10 @@ pub struct BodyState {
 /// Spa body — everything pool has, plus accessories like jets.
 #[derive(Debug, Clone, Serialize)]
 pub struct SpaState {
+    /// Circuit is commanded on by the controller.
     pub on: bool,
+    /// Water is actually flowing (circuit on AND pump running with RPM > 0).
+    pub active: bool,
     pub temperature: i32,
     pub setpoint: i32,
     pub heat_mode: String,
@@ -236,22 +244,33 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
     let pool_body = status.bodies.iter().find(|b| b.body_type == 0);
     let spa_body = status.bodies.iter().find(|b| b.body_type == 1);
 
-    let pool_state = pool_body.map(|body| BodyState {
-        on: pool_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false),
-        temperature: body.current_temp,
-        setpoint: body.set_point,
-        heat_mode: fmt_heat_mode(body.heat_mode),
-        heating: fmt_heat_status(body.heat_status),
+    // Pump is actively flowing water when running with measurable RPM.
+    let pump_flowing = primary_pump.as_ref()
+        .map(|p| p.running && p.rpm > 0)
+        .unwrap_or(false);
+
+    let pool_state = pool_body.map(|body| {
+        let on = pool_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false);
+        BodyState {
+            on,
+            active: on && pump_flowing,
+            temperature: body.current_temp,
+            setpoint: body.set_point,
+            heat_mode: fmt_heat_mode(body.heat_mode),
+            heating: fmt_heat_status(body.heat_status),
+        }
     });
 
     let spa_state = spa_body.map(|body| {
+        let on = spa_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false);
         let mut accessories = HashMap::new();
         for circ in &spa_accessory_circuits {
             let slug = slugify(&circ.name);
             accessories.insert(slug, circuit_state(circ.circuit_id));
         }
         SpaState {
-            on: spa_circuit.map(|c| circuit_state(c.circuit_id)).unwrap_or(false),
+            on,
+            active: on && pump_flowing,
             temperature: body.current_temp,
             setpoint: body.set_point,
             heat_mode: fmt_heat_mode(body.heat_mode),
@@ -370,6 +389,7 @@ mod tests {
         // Pool
         let pool = system.pool.as_ref().expect("should have pool");
         assert!(!pool.on);
+        assert!(!pool.active); // off circuit can't be active
         assert_eq!(pool.temperature, 105);
         assert_eq!(pool.setpoint, 59);
         assert_eq!(pool.heat_mode, "heat-pump");
@@ -377,6 +397,7 @@ mod tests {
         // Spa with jets as accessory
         let spa = system.spa.as_ref().expect("should have spa");
         assert!(!spa.on);
+        assert!(!spa.active);
         assert_eq!(spa.temperature, 103);
         assert_eq!(spa.setpoint, 104);
         assert_eq!(spa.accessories.get("jets"), Some(&false));

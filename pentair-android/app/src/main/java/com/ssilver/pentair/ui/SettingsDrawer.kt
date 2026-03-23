@@ -44,6 +44,8 @@ fun SettingsDrawer(
     system: SystemInfo?,
     pump: PumpInfo?,
     connectionState: ConnectionState,
+    useClassicUi: Boolean,
+    onUseClassicUiChange: (Boolean) -> Unit,
     onAuxToggle: (String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -116,6 +118,40 @@ fun SettingsDrawer(
                 )
             }
 
+            Text(
+                text = "Interface",
+                fontSize = 12.sp,
+                color = TextFaint,
+                modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+            )
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp),
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    ViewModeChip(
+                        label = "Modern",
+                        selected = !useClassicUi,
+                        onClick = { onUseClassicUiChange(false) },
+                    )
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    ViewModeChip(
+                        label = "Classic",
+                        selected = useClassicUi,
+                        onClick = { onUseClassicUiChange(true) },
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                color = Color.White.copy(alpha = 0.06f),
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
             // Tech info rows
             TechRow(
                 label = "Status",
@@ -148,6 +184,43 @@ fun SettingsDrawer(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ViewModeChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                if (selected) Accent.copy(alpha = 0.14f)
+                else Color.White.copy(alpha = 0.04f)
+            )
+            .border(
+                width = 1.dp,
+                color = if (selected) Accent.copy(alpha = 0.32f)
+                else Color.White.copy(alpha = 0.06f),
+                shape = RoundedCornerShape(16.dp),
+            )
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(vertical = 14.dp),
+    ) {
+        Text(
+            text = label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (selected) Accent else TextDim,
+        )
     }
 }
 

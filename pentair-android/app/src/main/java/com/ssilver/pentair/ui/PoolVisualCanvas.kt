@@ -76,11 +76,9 @@ fun PoolVisualCanvas(
     val waterShape = RoundedCornerShape(16.dp)
     val spaShape = RoundedCornerShape(16.dp)
 
-    // Deck container — matches web UI: 3px padding, 14px border-radius
+    // Deck container — fills available space with rounded corners
     Box(
         modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(4f / 5f)
             .clip(deckShape)
             .background(
                 Brush.linearGradient(
@@ -138,33 +136,35 @@ fun PoolVisualCanvas(
                 Column(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
-                        .padding(start = 20.dp, bottom = 56.dp),
+                        .padding(start = 24.dp, bottom = 64.dp),
                 ) {
                     Text(
-                        text = "${pool.temperature}\u00B0",
-                        fontSize = 40.sp,
+                        text = if (pool.temperature > 0) "${pool.temperature}\u00B0" else "--\u00B0",
+                        fontSize = 52.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (poolOn) TextBright else TextBright.copy(alpha = 0.5f),
                         letterSpacing = (-2).sp,
-                        lineHeight = 40.sp,
+                        lineHeight = 52.sp,
                     )
                     Text(
                         text = "set ${pool.setpoint}\u00B0",
-                        fontSize = 13.sp,
+                        fontSize = 20.sp,
                         color = if (poolOn) Color.White.copy(alpha = 0.5f) else TextFaint,
-                        modifier = Modifier.clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = onPoolSetpointClick,
-                        ),
+                        modifier = Modifier
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onPoolSetpointClick,
+                            )
+                            .padding(vertical = 4.dp),
                     )
                     if (pool.heating != "off") {
                         Text(
                             text = "Heating",
-                            fontSize = 11.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Warm,
-                            modifier = Modifier.padding(top = 3.dp),
+                            modifier = Modifier.padding(top = 4.dp),
                         )
                     }
                 }
@@ -228,30 +228,32 @@ fun PoolVisualCanvas(
                             .padding(horizontal = 8.dp),
                     ) {
                         Text(
-                            text = "${spa.temperature}\u00B0",
-                            fontSize = 36.sp,
+                            text = if (spa.temperature > 0) "${spa.temperature}\u00B0" else "--\u00B0",
+                            fontSize = 44.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (spaOn) TextBright else TextBright.copy(alpha = 0.5f),
                             letterSpacing = (-2).sp,
-                            lineHeight = 36.sp,
+                            lineHeight = 44.sp,
                         )
                         Text(
                             text = "set ${spa.setpoint}\u00B0",
-                            fontSize = 12.sp,
+                            fontSize = 18.sp,
                             color = if (spaOn) Color.White.copy(alpha = 0.5f) else TextFaint,
-                            modifier = Modifier.clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null,
-                                onClick = onSpaSetpointClick,
-                            ),
+                            modifier = Modifier
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onSpaSetpointClick,
+                                )
+                                .padding(vertical = 4.dp),
                         )
                         if (spa.heating != "off") {
                             Text(
                                 text = "Heating",
-                                fontSize = 11.sp,
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Warm,
-                                modifier = Modifier.padding(top = 3.dp),
+                                modifier = Modifier.padding(top = 4.dp),
                             )
                         }
                     }
@@ -273,7 +275,7 @@ fun PoolVisualCanvas(
                 onModeSelect = onLightModeSelect,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(10.dp),
+                    .padding(14.dp),
             )
         }
     }

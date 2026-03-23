@@ -35,7 +35,7 @@ fun SpaSegmentedControl(
         modifier = modifier
             .clip(trackShape)
             .background(Color.White.copy(alpha = 0.06f))
-            .padding(3.dp),
+            .padding(4.dp),
     ) {
         segments.forEach { (key, label) ->
             val isActive = currentState == key
@@ -51,11 +51,11 @@ fun SpaSegmentedControl(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                     ) { onStateChange(key) }
-                    .padding(vertical = 4.dp),
+                    .padding(vertical = 10.dp),
             ) {
                 Text(
                     text = label,
-                    fontSize = 9.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = if (isActive) Teal else TextFaint,
                     textAlign = TextAlign.Center,
