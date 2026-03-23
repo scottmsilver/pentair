@@ -63,6 +63,8 @@ Write endpoints use semantic identifiers:
 
 Smart behaviors: jets auto-enables spa, spa-off disables jets, light mode tracked by daemon.
 
+Pool and spa bodies include `active: bool` — true when the circuit is on AND the pump is running with RPM > 0. Use `on` for what the user commanded, `active` for whether water is actually flowing.
+
 ## Key Files
 
 - `docs/protocol-reference.md` — byte-level protocol documentation
