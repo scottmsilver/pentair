@@ -7,6 +7,8 @@ import androidx.compose.runtime.Composable
 private val PoolColorScheme = darkColorScheme(
     primary = Accent,
     secondary = Teal,
+    primaryContainer = AccentContainer,
+    secondaryContainer = SecondaryContainer,
     background = PoolBackground,
     surface = PoolSurface,
     surfaceVariant = PoolSurfaceVariant,
@@ -14,6 +16,8 @@ private val PoolColorScheme = darkColorScheme(
     outlineVariant = PoolOutlineVariant,
     onPrimary = PoolBackground,
     onSecondary = PoolBackground,
+    onPrimaryContainer = TextBright,
+    onSecondaryContainer = TextBright,
     onBackground = TextBright,
     onSurface = TextBright,
     onSurfaceVariant = TextDim,

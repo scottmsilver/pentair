@@ -47,6 +47,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
     val discoveredAddress by viewModel.discoveredAddress.collectAsStateWithLifecycle()
     val activeAddress by viewModel.activeAddress.collectAsStateWithLifecycle()
     val isTestingAddress by viewModel.isTestingAddress.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
     val diagnostics by viewModel.diagnostics.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -65,6 +66,9 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
     val pool = system?.pool
     val spa = system?.spa
     val lights = system?.lights
+    val isCelsius = system?.system?.temp_unit == "c"
+    val poolSetpointRange = if (isCelsius) 7..40 else 45..104
+    val spaSetpointRange = if (isCelsius) 16..43 else 60..110
 
     // Derive spa state from data
     val spaState = when {
@@ -123,9 +127,11 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
                 spa = spa,
                 lights = lights,
                 isLoading = system == null,
+                isRefreshing = isRefreshing,
                 sharedPump = system?.system?.pool_spa_shared_pump == true,
                 connectionState = connectionState,
                 spaState = spaState,
+                onRefresh = viewModel::refresh,
                 onShowSettings = { showSettings = true },
                 onPoolSetpointClick = { showPoolSetpoint = true },
                 onSpaStateChange = { viewModel.setSpaState(it) },
@@ -202,6 +208,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
                 showPoolSetpoint = false
             },
             onDismiss = { showPoolSetpoint = false },
+            range = poolSetpointRange,
         )
     }
 
@@ -215,6 +222,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
                 showSpaSetpoint = false
             },
             onDismiss = { showSpaSetpoint = false },
+            range = spaSetpointRange,
         )
     }
 }

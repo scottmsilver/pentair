@@ -85,9 +85,7 @@ struct ContentView: View {
         }
         .sheet(item: $setpointTarget) { target in
             SetpointSheet(target: target) { newValue in
-                Task {
-                    await viewModel.setSetpoint(body: target.body, temperature: newValue)
-                }
+                viewModel.setSetpoint(body: target.body, temperature: newValue)
             }
         }
     }
@@ -301,8 +299,9 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 ForEach(SpaMode.allCases) { mode in
                     modeButton(title: mode.title, selected: currentMode == mode) {
-                        Task { await viewModel.setSpaMode(mode) }
+                        viewModel.setSpaMode(mode)
                     }
+                    .accessibilityLabel("\(mode.title), \(currentMode == mode ? "selected" : "not selected")")
                 }
             }
         }
@@ -329,7 +328,7 @@ struct ContentView: View {
                         fill: nil,
                         selected: !lights.on
                     ) {
-                        Task { await viewModel.setLightMode("off") }
+                        viewModel.setLightMode("off")
                     }
 
                     ForEach(selectableLightModes(from: lights), id: \.self) { mode in
@@ -338,7 +337,7 @@ struct ContentView: View {
                             fill: lightModeFill(for: mode),
                             selected: lights.on && lights.mode == mode
                         ) {
-                            Task { await viewModel.setLightMode(mode) }
+                            viewModel.setLightMode(mode)
                         }
                     }
                 }
@@ -497,7 +496,7 @@ struct ContentView: View {
         Binding(
             get: { auxiliary.on },
             set: { _ in
-                Task { await viewModel.toggleAuxiliary(auxiliary) }
+                viewModel.toggleAuxiliary(auxiliary)
             }
         )
     }
@@ -506,7 +505,7 @@ struct ContentView: View {
         Binding(
             get: { pool.on },
             set: { isOn in
-                Task { await viewModel.setPoolMode(isOn ? .on : .off) }
+                viewModel.setPoolMode(isOn ? .on : .off)
             }
         )
     }
@@ -564,7 +563,9 @@ struct ContentView: View {
         ]
 
         let available = Set(lights.availableModes.filter { $0 != "off" })
-        return preferredOrder.filter { available.contains($0) }
+        let ordered = preferredOrder.filter { available.contains($0) }
+        let remaining = lights.availableModes.filter { $0 != "off" && !preferredOrder.contains($0) }
+        return ordered + remaining
     }
 
     private func makeSetpointTarget(

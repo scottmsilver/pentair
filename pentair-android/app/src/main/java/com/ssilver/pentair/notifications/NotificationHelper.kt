@@ -4,12 +4,14 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import androidx.core.app.NotificationCompat
+import java.util.concurrent.atomic.AtomicInteger
 
 object NotificationHelper {
     private const val CHANNEL_ID = "pool_alerts"
     private const val CHANNEL_NAME = "Pool Alerts"
     @Volatile
     private var channelCreated = false
+    private val notificationIdCounter = AtomicInteger(0)
 
     fun show(context: Context, title: String, body: String) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -34,6 +36,6 @@ object NotificationHelper {
             .setAutoCancel(true)
             .build()
 
-        manager.notify(System.currentTimeMillis().toInt(), notification)
+        manager.notify(notificationIdCounter.incrementAndGet(), notification)
     }
 }

@@ -4,7 +4,6 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.ssilver.pentair.discovery.DaemonDiscovery
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +23,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,6 +37,7 @@ data class DiagnosticEvent(
 
 data class PendingChange(
     val description: String,
+    val mutate: (PoolSystem) -> PoolSystem,
     val verify: (PoolSystem) -> Boolean,
     val appliedAt: Long = System.currentTimeMillis(),
 )
@@ -46,7 +47,7 @@ class PoolRepository @Inject constructor(
     private val okHttp: OkHttpClient,
     private val discovery: DaemonDiscovery,
 ) : DefaultLifecycleObserver {
-    private val moshi = Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+    private val moshi = Moshi.Builder().build()
 
     private val _state = MutableStateFlow<PoolSystem?>(null)
     val state: StateFlow<PoolSystem?> = _state.asStateFlow()
@@ -66,6 +67,9 @@ class PoolRepository @Inject constructor(
     private val _isTestingAddress = MutableStateFlow(false)
     val isTestingAddress: StateFlow<Boolean> = _isTestingAddress.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _diagnostics = MutableStateFlow<List<DiagnosticEvent>>(emptyList())
     val diagnostics: StateFlow<List<DiagnosticEvent>> = _diagnostics.asStateFlow()
 
@@ -76,7 +80,9 @@ class PoolRepository @Inject constructor(
     private var api: PoolApiClient? = null
     private var webSocket: WebSocket? = null
     private var baseUrl: String? = null
-    private var reconnectDelay = 1000L
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+    private var connectJob: kotlinx.coroutines.Job? = null
+    private val reconnectDelay = AtomicLong(1000L)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateLock = Any()
 
@@ -98,7 +104,7 @@ class PoolRepository @Inject constructor(
         synchronized(stateLock) {
             val current = _state.value ?: return
             _state.value = mutate(current)
-            _pendingChanges.add(PendingChange(description, verify))
+            _pendingChanges.add(PendingChange(description, mutate, verify))
         }
     }
 
@@ -118,8 +124,8 @@ class PoolRepository @Inject constructor(
             if (candidates.isEmpty()) {
                 recordDiagnostic("discovery", "No daemon found")
                 _connectionState.value = ConnectionState.DISCONNECTED
-                delay(reconnectDelay)
-                reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
+                delay(reconnectDelay.get())
+                reconnectDelay.getAndUpdate { (it * 2).coerceAtMost(30000L) }
                 continue
             }
 
@@ -140,31 +146,40 @@ class PoolRepository @Inject constructor(
             // All fetch attempts failed — back off and retry discovery
             recordDiagnostic("http", "All connect attempts failed for ${candidates.joinToString()}")
             _connectionState.value = ConnectionState.DISCONNECTED
-            delay(reconnectDelay)
-            reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
+            delay(reconnectDelay.get())
+            reconnectDelay.getAndUpdate { (it * 2).coerceAtMost(30000L) }
         }
     }
 
     suspend fun refresh() {
         val address = _activeAddress.value ?: return
 
+        _isRefreshing.value = true
         try {
             ensureApi(address)
             recordDiagnostic("http", "GET $address/api/pool")
             val result = api?.getPool()
-            synchronized(stateLock) {
-                _state.value = result
-            }
-            _connectionState.value = ConnectionState.CONNECTED
-            reconnectDelay = 1000L
-            recordDiagnostic("http", "GET /api/pool succeeded")
-
             if (result != null) {
                 reconcilePendingChanges(result)
             }
+            synchronized(stateLock) {
+                var merged = result
+                // Re-apply pending optimistic mutations so they aren't overwritten by stale server state
+                if (merged != null) {
+                    for (change in _pendingChanges) {
+                        merged = change.mutate(merged!!)
+                    }
+                }
+                _state.value = merged
+            }
+            _connectionState.value = ConnectionState.CONNECTED
+            reconnectDelay.set(1000L)
+            recordDiagnostic("http", "GET /api/pool succeeded")
         } catch (e: Exception) {
             recordDiagnostic("http", "GET /api/pool failed: ${e.message}")
             _connectionState.value = ConnectionState.DISCONNECTED
+        } finally {
+            _isRefreshing.value = false
         }
     }
 
@@ -250,9 +265,9 @@ class PoolRepository @Inject constructor(
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 _connectionState.value = ConnectionState.DISCONNECTED
                 recordDiagnostic("websocket", "WebSocket failed: ${t.message}")
-                scope.launch {
-                    delay(reconnectDelay)
-                    reconnectDelay = (reconnectDelay * 2).coerceAtMost(30000L)
+                reconnectJob = scope.launch {
+                    delay(reconnectDelay.get())
+                    reconnectDelay.getAndUpdate { (it * 2).coerceAtMost(30000L) }
                     connectWebSocket()
                 }
             }
@@ -266,7 +281,7 @@ class PoolRepository @Inject constructor(
 
     // Lifecycle: disconnect WS on background, reconnect on foreground
     override fun onStart(owner: LifecycleOwner) {
-        scope.launch {
+        connectJob = scope.launch {
             if (_connectionState.value == ConnectionState.DISCONNECTED) {
                 connect()
             } else {
@@ -279,6 +294,10 @@ class PoolRepository @Inject constructor(
     }
 
     override fun onStop(owner: LifecycleOwner) {
+        connectJob?.cancel()
+        connectJob = null
+        reconnectJob?.cancel()
+        reconnectJob = null
         webSocket?.close(1000, "backgrounded")
         webSocket = null
     }
@@ -446,12 +465,18 @@ class PoolRepository @Inject constructor(
             try {
                 recordDiagnostic("http", "GET $address/api/pool")
                 val result = api?.getPool() ?: throw IllegalStateException("API not ready")
-                synchronized(stateLock) { _state.value = result }
+                reconcilePendingChanges(result)
+                synchronized(stateLock) {
+                    var merged = result
+                    for (change in _pendingChanges) {
+                        merged = change.mutate(merged)
+                    }
+                    _state.value = merged
+                }
                 _connectionState.value = ConnectionState.CONNECTED
-                reconnectDelay = 1000L
+                reconnectDelay.set(1000L)
                 recordDiagnostic("http", "GET /api/pool succeeded")
                 connectWebSocket()
-                reconcilePendingChanges(result)
                 return true
             } catch (e: Exception) {
                 recordDiagnostic("http", "Connect attempt $attempt failed: ${e.message}")

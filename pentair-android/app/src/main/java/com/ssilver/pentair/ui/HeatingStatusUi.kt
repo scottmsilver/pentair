@@ -19,14 +19,14 @@ fun poolHeatingStatus(
     pool: BodyState,
     spa: SpaState?,
     sharedPump: Boolean,
-): HeatingStatusUi = resolveHeatingStatus(
+): HeatingStatusUi? = resolveHeatingStatus(
     on = pool.on,
     active = pool.active,
     temperature = pool.temperature,
     setpoint = pool.setpoint,
     heatMode = pool.heat_mode,
     heating = pool.heating,
-    other = spa?.toOtherBodyStatus("Spa"),
+    other = spa?.toOtherBodyStatus(),
     sharedPump = sharedPump,
 )
 
@@ -34,45 +34,27 @@ fun spaHeatingStatus(
     spa: SpaState,
     pool: BodyState?,
     sharedPump: Boolean,
-): HeatingStatusUi = resolveHeatingStatus(
+): HeatingStatusUi? = resolveHeatingStatus(
     on = spa.on,
     active = spa.active,
     temperature = spa.temperature,
     setpoint = spa.setpoint,
     heatMode = spa.heat_mode,
     heating = spa.heating,
-    other = pool?.toOtherBodyStatus("Pool"),
+    other = pool?.toOtherBodyStatus(),
     sharedPump = sharedPump,
 )
 
 private data class OtherBodyStatus(
-    val name: String,
     val on: Boolean,
-    val active: Boolean,
-    val temperature: Int,
-    val setpoint: Int,
-    val heatMode: String,
-    val heating: String,
 )
 
-private fun BodyState.toOtherBodyStatus(name: String) = OtherBodyStatus(
-    name = name,
+private fun BodyState.toOtherBodyStatus() = OtherBodyStatus(
     on = on,
-    active = active,
-    temperature = temperature,
-    setpoint = setpoint,
-    heatMode = heat_mode,
-    heating = heating,
 )
 
-private fun SpaState.toOtherBodyStatus(name: String) = OtherBodyStatus(
-    name = name,
+private fun SpaState.toOtherBodyStatus() = OtherBodyStatus(
     on = on,
-    active = active,
-    temperature = temperature,
-    setpoint = setpoint,
-    heatMode = heat_mode,
-    heating = heating,
 )
 
 private fun resolveHeatingStatus(
@@ -84,7 +66,7 @@ private fun resolveHeatingStatus(
     heating: String,
     other: OtherBodyStatus?,
     sharedPump: Boolean,
-): HeatingStatusUi {
+): HeatingStatusUi? {
     val normalizedHeating = heating.lowercase()
     val normalizedHeatMode = heatMode.lowercase()
 
@@ -109,34 +91,7 @@ private fun resolveHeatingStatus(
     }
 
     if (sharedPump && other?.on == true) {
-        val otherHeating = other.heating.lowercase()
-        val otherHeatMode = other.heatMode.lowercase()
-
-        if (otherHeating != "off" && otherHeating != "unknown") {
-            return HeatingStatusUi(
-                label = "Heating ${other.name.lowercase()}",
-                tone = HeatingStatusTone.HEATING,
-            )
-        }
-
-        if (!other.active) {
-            return HeatingStatusUi(
-                label = "${other.name} starting",
-                tone = HeatingStatusTone.WARNING,
-            )
-        }
-
-        if (otherHeatMode != "off" && other.temperature >= other.setpoint) {
-            return HeatingStatusUi(
-                label = "${other.name} at temp",
-                tone = HeatingStatusTone.NEUTRAL,
-            )
-        }
-
-        return HeatingStatusUi(
-            label = "${other.name} on",
-            tone = HeatingStatusTone.NEUTRAL,
-        )
+        return null
     }
 
     return HeatingStatusUi(label = "Off", tone = HeatingStatusTone.NEUTRAL)

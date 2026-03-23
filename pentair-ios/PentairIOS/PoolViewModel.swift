@@ -23,8 +23,10 @@ final class PoolViewModel: ObservableObject {
     private var activeBaseURL: URL?
     private var manualOverride = false
     private var hasStarted = false
+    private var api: PoolAPI?
     private var webSocketTask: URLSessionWebSocketTask?
     private var webSocketURL: URL?
+    private var wsReconnectDelay: TimeInterval = 2.0
     private var bannerDismissTask: Task<Void, Never>?
     private var discoveryHintTask: Task<Void, Never>?
 
@@ -34,6 +36,7 @@ final class PoolViewModel: ObservableObject {
             manualAddress = savedURL.absoluteString
             activeBaseURL = savedURL
             activeAddress = savedURL.absoluteString
+            api = PoolAPI(baseURL: savedURL)
             recordDiagnostic("startup", "Loaded saved daemon address \(savedURL.absoluteString)")
         }
 
@@ -130,21 +133,23 @@ final class PoolViewModel: ObservableObject {
         await refresh()
     }
 
-    func setPoolMode(_ mode: PoolBodyMode) async {
+    func setPoolMode(_ mode: PoolBodyMode) {
         applyOptimistic { current in
             current.updating(pool: current.pool?.updating(on: mode == .on))
         }
         recordDiagnostic("command", "Pool \(mode.rawValue)")
 
-        switch mode {
-        case .off:
-            await sendCommand(path: "/api/pool/off")
-        case .on:
-            await sendCommand(path: "/api/pool/on")
+        Task {
+            switch mode {
+            case .off:
+                await sendCommand(path: "/api/pool/off")
+            case .on:
+                await sendCommand(path: "/api/pool/on")
+            }
         }
     }
 
-    func setSpaMode(_ mode: SpaMode) async {
+    func setSpaMode(_ mode: SpaMode) {
         let currentSpa = system?.spa
         recordDiagnostic("command", "Spa \(mode.rawValue)")
 
@@ -171,27 +176,29 @@ final class PoolViewModel: ObservableObject {
             return current.updating(spa: nextSpa)
         }
 
-        switch mode {
-        case .off:
-            await sendCommand(path: "/api/spa/off")
-        case .spa:
-            if currentSpa?.accessories["jets"] == true {
-                await sendCommand(path: "/api/spa/jets/off", refreshDelay: 300_000_000)
+        Task {
+            switch mode {
+            case .off:
+                await sendCommand(path: "/api/spa/off")
+            case .spa:
+                if currentSpa?.accessories["jets"] == true {
+                    await sendCommand(path: "/api/spa/jets/off", refreshDelay: 300_000_000)
+                }
+                if currentSpa?.on != true {
+                    await sendCommand(path: "/api/spa/on")
+                } else {
+                    await refresh(silent: true)
+                }
+            case .jets:
+                if currentSpa?.on != true {
+                    await sendCommand(path: "/api/spa/on", refreshDelay: 700_000_000)
+                }
+                await sendCommand(path: "/api/spa/jets/on")
             }
-            if currentSpa?.on != true {
-                await sendCommand(path: "/api/spa/on")
-            } else {
-                await refresh(silent: true)
-            }
-        case .jets:
-            if currentSpa?.on != true {
-                await sendCommand(path: "/api/spa/on", refreshDelay: 700_000_000)
-            }
-            await sendCommand(path: "/api/spa/jets/on")
         }
     }
 
-    func setLightMode(_ mode: String) async {
+    func setLightMode(_ mode: String) {
         recordDiagnostic("command", "Lights \(mode)")
         applyOptimistic { current in
             current.updating(
@@ -202,14 +209,16 @@ final class PoolViewModel: ObservableObject {
             )
         }
 
-        if mode == "off" {
-            await sendCommand(path: "/api/lights/off")
-        } else {
-            await sendCommand(path: "/api/lights/mode", body: ["mode": mode])
+        Task {
+            if mode == "off" {
+                await sendCommand(path: "/api/lights/off")
+            } else {
+                await sendCommand(path: "/api/lights/mode", body: ["mode": mode])
+            }
         }
     }
 
-    func setSetpoint(body: String, temperature: Int) async {
+    func setSetpoint(body: String, temperature: Int) {
         recordDiagnostic("command", "\(body.capitalized) setpoint \(temperature)")
         applyOptimistic { current in
             switch body {
@@ -220,11 +229,13 @@ final class PoolViewModel: ObservableObject {
             }
         }
 
-        let endpoint = body == "spa" ? "/api/spa/heat" : "/api/pool/heat"
-        await sendCommand(path: endpoint, body: ["setpoint": temperature])
+        Task {
+            let endpoint = body == "spa" ? "/api/spa/heat" : "/api/pool/heat"
+            await sendCommand(path: endpoint, body: ["setpoint": temperature])
+        }
     }
 
-    func toggleAuxiliary(_ auxiliary: AuxiliaryState) async {
+    func toggleAuxiliary(_ auxiliary: AuxiliaryState) {
         let targetState = auxiliary.on ? "off" : "on"
         recordDiagnostic("command", "Aux \(auxiliary.id) \(targetState)")
         applyOptimistic { current in
@@ -234,7 +245,9 @@ final class PoolViewModel: ObservableObject {
                 }
             )
         }
-        await sendCommand(path: "/api/auxiliary/\(auxiliary.id)/\(targetState)")
+        Task {
+            await sendCommand(path: "/api/auxiliary/\(auxiliary.id)/\(targetState)")
+        }
     }
 
     func spaMode(for spa: SpaState?) -> SpaMode {
@@ -262,7 +275,7 @@ final class PoolViewModel: ObservableObject {
     }
 
     private func refresh(silent: Bool) async {
-        guard let activeBaseURL else {
+        guard let api else {
             connectionState = .discovering
             statusMessage = "Waiting for a daemon address."
             recordDiagnostic("http", "Refresh skipped because no daemon address is active.")
@@ -275,10 +288,9 @@ final class PoolViewModel: ObservableObject {
 
         isRefreshing = true
         defer { isRefreshing = false }
-        recordDiagnostic("http", "GET \(activeBaseURL.absoluteString)/api/pool")
+        recordDiagnostic("http", "GET \(api.baseURL.absoluteString)/api/pool")
 
         do {
-            let api = PoolAPI(baseURL: activeBaseURL)
             system = try await api.fetchPool()
             connectionState = .connected
             statusMessage = nil
@@ -293,14 +305,14 @@ final class PoolViewModel: ObservableObject {
     }
 
     private func sendCommand(path: String, body: [String: Any]? = nil, refreshDelay: UInt64 = 800_000_000) async {
-        guard let activeBaseURL else {
+        guard let api else {
             return
         }
 
         recordDiagnostic("http", "POST \(path)")
 
         do {
-            try await PoolAPI(baseURL: activeBaseURL).post(path, body: body)
+            try await api.post(path, body: body)
             recordDiagnostic("http", "POST \(path) succeeded")
             try? await Task.sleep(nanoseconds: refreshDelay)
             await refresh(silent: true)
@@ -322,6 +334,7 @@ final class PoolViewModel: ObservableObject {
     private func setActiveBaseURL(_ url: URL) {
         activeBaseURL = url
         activeAddress = url.absoluteString
+        api = PoolAPI(baseURL: url)
         defaults.set(url.absoluteString, forKey: addressDefaultsKey)
         recordDiagnostic("startup", "Active daemon address set to \(url.absoluteString)")
 
@@ -347,6 +360,7 @@ final class PoolViewModel: ObservableObject {
 
         let task = URLSession.shared.webSocketTask(with: url)
         webSocketTask = task
+        wsReconnectDelay = 2.0
         recordDiagnostic("websocket", "Connecting \(url.absoluteString)")
         task.resume()
         receiveNextMessage(from: task)
@@ -365,6 +379,7 @@ final class PoolViewModel: ObservableObject {
 
                 switch result {
                 case .success(_):
+                    self.wsReconnectDelay = 2.0
                     self.recordDiagnostic("websocket", "Received daemon event")
                     await self.refresh(silent: true)
                     self.receiveNextMessage(from: task)
@@ -387,13 +402,16 @@ final class PoolViewModel: ObservableObject {
             connectionState = .disconnected("Lost live updates. Reconnecting…")
         }
 
+        let delay = wsReconnectDelay
+        wsReconnectDelay = min(wsReconnectDelay * 2, 60.0)
+
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             await refresh(silent: true)
         }
 
         statusMessage = error.localizedDescription
-        recordDiagnostic("websocket", "Websocket failed: \(error.localizedDescription)")
+        recordDiagnostic("websocket", "Websocket failed: \(error.localizedDescription). Reconnecting in \(Int(delay))s.")
     }
 
     private func presentBanner(_ message: String) {

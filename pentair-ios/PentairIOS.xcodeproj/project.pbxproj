@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		000000000000000000000020 /* AppIntents.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 000000000000000000000021 /* AppIntents.framework */; };
 		000000000000000000000011 /* PentairIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000010 /* PentairIOSApp.swift */; };
 		000000000000000000000013 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000012 /* ContentView.swift */; };
 		000000000000000000000015 /* PoolViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000014 /* PoolViewModel.swift */; };
@@ -18,6 +19,7 @@
 
 /* Begin PBXFileReference section */
 		000000000000000000000005 /* PentairIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PentairIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		000000000000000000000021 /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		000000000000000000000010 /* PentairIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PentairIOSApp.swift; sourceTree = "<group>"; };
 		000000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		000000000000000000000014 /* PoolViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoolViewModel.swift; sourceTree = "<group>"; };
@@ -33,6 +35,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				000000000000000000000020 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,8 +102,8 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2600;
-				LastUpgradeCheck = 2600;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
 				TargetAttributes = {
 					000000000000000000000006 = {
 						CreatedOnToolsVersion = 26.3;
@@ -177,10 +180,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A5KW8AWNPN;
+				ENABLE_APP_INTENTS_METADATA_GENERATION = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PentairIOS/Info.plist;
@@ -205,10 +210,12 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
 				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = A5KW8AWNPN;
+				ENABLE_APP_INTENTS_METADATA_GENERATION = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = PentairIOS/Info.plist;

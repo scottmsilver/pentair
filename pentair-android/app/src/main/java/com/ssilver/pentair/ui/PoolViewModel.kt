@@ -19,6 +19,7 @@ class PoolViewModel @Inject constructor(
     val discoveredAddress = repository.discoveredAddress
     val activeAddress = repository.activeAddress
     val isTestingAddress = repository.isTestingAddress
+    val isRefreshing = repository.isRefreshing
     val diagnostics = repository.diagnostics
     val rejections: SharedFlow<String> = repository.rejections
 

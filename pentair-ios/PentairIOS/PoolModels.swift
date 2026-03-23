@@ -220,13 +220,7 @@ extension PoolSystem {
                 heating: pool.heating,
                 other: spa.map {
                     OtherBodyStatus(
-                        name: "Spa",
-                        on: $0.on,
-                        active: $0.active,
-                        temperature: $0.temperature,
-                        setpoint: $0.setpoint,
-                        heatMode: $0.heatMode,
-                        heating: $0.heating
+                        on: $0.on
                     )
                 },
                 sharedPump: system.poolSpaSharedPump
@@ -242,13 +236,7 @@ extension PoolSystem {
                 heating: spa.heating,
                 other: pool.map {
                     OtherBodyStatus(
-                        name: "Pool",
-                        on: $0.on,
-                        active: $0.active,
-                        temperature: $0.temperature,
-                        setpoint: $0.setpoint,
-                        heatMode: $0.heatMode,
-                        heating: $0.heating
+                        on: $0.on
                     )
                 },
                 sharedPump: system.poolSpaSharedPump
@@ -258,13 +246,7 @@ extension PoolSystem {
 }
 
 private struct OtherBodyStatus {
-    let name: String
     let on: Bool
-    let active: Bool
-    let temperature: Int
-    let setpoint: Int
-    let heatMode: String
-    let heating: String
 }
 
 private func resolveHeatingStatus(
@@ -276,7 +258,7 @@ private func resolveHeatingStatus(
     heating: String,
     other: OtherBodyStatus?,
     sharedPump: Bool
-) -> HeatingStatusSummary {
+) -> HeatingStatusSummary? {
     let normalizedHeating = heating.lowercased()
     let normalizedHeatMode = heatMode.lowercased()
 
@@ -301,22 +283,7 @@ private func resolveHeatingStatus(
     }
 
     if sharedPump, let other, other.on {
-        let otherHeating = other.heating.lowercased()
-        let otherHeatMode = other.heatMode.lowercased()
-
-        if otherHeating != "off", otherHeating != "unknown" {
-            return HeatingStatusSummary(text: "Heating \(other.name.lowercased())", tone: .heating)
-        }
-
-        if !other.active {
-            return HeatingStatusSummary(text: "\(other.name) starting", tone: .warning)
-        }
-
-        if otherHeatMode != "off", other.temperature >= other.setpoint {
-            return HeatingStatusSummary(text: "\(other.name) at temp", tone: .neutral)
-        }
-
-        return HeatingStatusSummary(text: "\(other.name) on", tone: .neutral)
+        return nil
     }
 
     return HeatingStatusSummary(text: "Off", tone: .neutral)

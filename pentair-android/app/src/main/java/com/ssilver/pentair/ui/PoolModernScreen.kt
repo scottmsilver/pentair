@@ -17,13 +17,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,16 +42,23 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 import com.ssilver.pentair.data.BodyState
 import com.ssilver.pentair.data.ConnectionState
 import com.ssilver.pentair.data.LightState
@@ -63,9 +72,11 @@ fun PoolModernScreen(
     spa: SpaState?,
     lights: LightState?,
     isLoading: Boolean,
+    isRefreshing: Boolean,
     sharedPump: Boolean,
     connectionState: ConnectionState,
     spaState: String,
+    onRefresh: () -> Unit,
     onShowSettings: () -> Unit,
     onPoolSetpointClick: () -> Unit,
     onSpaStateChange: (String) -> Unit,
@@ -73,87 +84,105 @@ fun PoolModernScreen(
     onLightModeSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val pullToRefreshState = rememberPullToRefreshState()
+    val density = LocalDensity.current
+    val contentOffsetPx = with(density) {
+        (pullToRefreshState.distanceFraction.coerceIn(0f, 1.25f) * 88.dp.toPx())
+    }
+
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    ConnectionChip(
-                        connectionState = connectionState,
-                        onClick = onShowSettings,
-                    )
-                },
+            TopAppBar(
+                title = {},
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     actionIconContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 actions = {
                     IconButton(onClick = onShowSettings) {
-                        Icon(
-                            imageVector = Icons.Outlined.Settings,
-                            contentDescription = "Settings",
-                        )
+                        BadgedBox(
+                            badge = {
+                                ConnectionStatusBadge(connectionState = connectionState)
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Settings,
+                                contentDescription = "Settings",
+                            )
+                        }
                     }
                 },
             )
         },
     ) { innerPadding ->
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            state = pullToRefreshState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            if (isLoading) {
-                item {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(260.dp),
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-            } else {
-                if (pool != null) {
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationY = contentOffsetPx
+                    },
+            ) {
+                if (isLoading) {
                     item {
-                        BodyControlCard(
-                            title = "Pool",
-                            temperature = pool.temperature,
-                            setpoint = pool.setpoint,
-                            status = poolHeatingStatus(pool, spa, sharedPump),
-                            onSetpointClick = onPoolSetpointClick,
-                        )
-                    }
-                }
-
-                if (spa != null) {
-                    item {
-                        BodyControlCard(
-                            title = "Spa",
-                            temperature = spa.temperature,
-                            setpoint = spa.setpoint,
-                            status = spaHeatingStatus(spa, pool, sharedPump),
-                            onSetpointClick = onSpaSetpointClick,
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(260.dp),
                         ) {
-                            SegmentedActionRow(
-                                options = listOf("Off", "Spa", "Jets"),
-                                selected = spaState.replaceFirstChar { it.uppercase() },
-                                onSelect = { option -> onSpaStateChange(option.lowercase()) },
+                            CircularProgressIndicator()
+                        }
+                    }
+                } else {
+                    if (pool != null) {
+                        item {
+                            BodyControlCard(
+                                title = "Pool",
+                                temperature = pool.temperature,
+                                setpoint = pool.setpoint,
+                                status = poolHeatingStatus(pool, spa, sharedPump),
+                                onSetpointClick = onPoolSetpointClick,
                             )
                         }
                     }
-                }
 
-                if (lights != null) {
-                    item {
-                        LightsCard(
-                            lights = lights,
-                            onLightModeSelect = onLightModeSelect,
-                        )
+                    if (spa != null) {
+                        item {
+                            BodyControlCard(
+                                title = "Spa",
+                                temperature = spa.temperature,
+                                setpoint = spa.setpoint,
+                                status = spaHeatingStatus(spa, pool, sharedPump),
+                                onSetpointClick = onSpaSetpointClick,
+                            ) {
+                                SegmentedActionRow(
+                                    options = listOf("Off", "Spa", "Jets"),
+                                    selected = spaState.replaceFirstChar { it.uppercase() },
+                                    onSelect = { option -> onSpaStateChange(option.lowercase()) },
+                                )
+                            }
+                        }
+                    }
+
+                    if (lights != null) {
+                        item {
+                            LightsCard(
+                                lights = lights,
+                                onLightModeSelect = onLightModeSelect,
+                            )
+                        }
                     }
                 }
             }
@@ -162,35 +191,15 @@ fun PoolModernScreen(
 }
 
 @Composable
-private fun ConnectionChip(
-    connectionState: ConnectionState,
-    onClick: () -> Unit,
-) {
-    val dotColor = when (connectionState) {
-        ConnectionState.CONNECTED -> Color(0xFF4ADE80)
+private fun ConnectionStatusBadge(connectionState: ConnectionState) {
+    val color = when (connectionState) {
+        ConnectionState.CONNECTED -> Color(0xFF4ADE80).copy(alpha = 0.76f)
         ConnectionState.CONNECTING -> Color(0xFFF59E0B)
         ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.error
         ConnectionState.DISCOVERING -> MaterialTheme.colorScheme.primary
     }
-    val label = when (connectionState) {
-        ConnectionState.CONNECTED -> "Connected"
-        ConnectionState.CONNECTING -> "Connecting"
-        ConnectionState.DISCONNECTED -> "Disconnected"
-        ConnectionState.DISCOVERING -> "Searching"
-    }
 
-    AssistChip(
-        onClick = onClick,
-        label = { Text(label) },
-        leadingIcon = {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(dotColor),
-            )
-        },
-    )
+    Badge(containerColor = color)
 }
 
 @Composable
@@ -198,14 +207,23 @@ private fun BodyControlCard(
     title: String,
     temperature: Int,
     setpoint: Int,
-    status: HeatingStatusUi,
+    status: HeatingStatusUi?,
     onSetpointClick: () -> Unit,
     controls: @Composable ColumnScope.() -> Unit = {},
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+        elevation = CardDefaults.elevatedCardElevation(
+            defaultElevation = 5.dp,
+            pressedElevation = 7.dp,
+        ),
+    ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(20.dp),
-            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(16.dp),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -213,30 +231,32 @@ private fun BodyControlCard(
             ) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(modifier = Modifier.weight(1f))
-                Text(
-                    text = status.label,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = heatingStatusColor(status),
-                )
+                if (status != null) {
+                    Text(
+                        text = status.label,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
+                        color = heatingStatusColor(status),
+                    )
+                }
             }
 
             Text(
                 text = "$temperature\u00B0",
-                style = MaterialTheme.typography.displayMedium,
+                style = MaterialTheme.typography.displaySmall.copy(fontSize = 44.sp),
                 fontWeight = FontWeight.SemiBold,
             )
+
+            controls()
 
             SetpointRow(
                 label = "Setpoint",
                 value = "$setpoint\u00B0",
                 onClick = onSetpointClick,
             )
-
-            controls()
         }
     }
 }
@@ -266,7 +286,8 @@ private fun SetpointRow(
             headlineContent = {
                 Text(
                     text = label,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
+                    fontWeight = FontWeight.Medium,
                 )
             },
             trailingContent = {
@@ -276,7 +297,7 @@ private fun SetpointRow(
                 ) {
                     Text(
                         text = value,
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp),
                         fontWeight = FontWeight.SemiBold,
                     )
                     Icon(
@@ -301,7 +322,7 @@ private fun SegmentedActionRow(
     onSelect: (String) -> Unit,
 ) {
     SingleChoiceSegmentedButtonRow(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.wrapContentWidth(),
     ) {
         options.forEachIndexed { index, option ->
             SegmentedButton(
@@ -320,10 +341,19 @@ private fun LightsCard(
     lights: LightState,
     onLightModeSelect: (String) -> Unit,
 ) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+        ),
+        elevation = CardDefaults.elevatedCardElevation(
+            defaultElevation = 1.dp,
+            pressedElevation = 3.dp,
+        ),
+    ) {
         Column(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(16.dp),
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -331,7 +361,7 @@ private fun LightsCard(
             ) {
                 Text(
                     text = "Lights",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(modifier = Modifier.weight(1f))
@@ -343,8 +373,8 @@ private fun LightsCard(
             }
 
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
                 maxItemsInEachRow = 6,
             ) {
                 LightModeSwatch(
@@ -377,14 +407,18 @@ private fun LightModeSwatch(
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .size(50.dp)
+            .size(44.dp)
             .semantics { contentDescription = label }
             .clickable(onClick = onClick),
     ) {
         Surface(
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-            tonalElevation = if (selected) 3.dp else 0.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            },
+            tonalElevation = if (selected) 2.dp else 0.dp,
             border = BorderStroke(
                 width = if (selected) 2.dp else 1.dp,
                 color = if (selected) {
@@ -393,14 +427,15 @@ private fun LightModeSwatch(
                     MaterialTheme.colorScheme.outlineVariant
                 },
             ),
-            modifier = Modifier.size(46.dp),
+            modifier = Modifier.size(42.dp),
         ) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(5.dp)
+                    .padding(6.dp)
                     .clip(CircleShape)
+                    .alpha(if (selected) 1f else 0.76f)
                     .background(
                         brush ?: Brush.linearGradient(
                             listOf(
@@ -458,32 +493,32 @@ private fun selectableLightModes(lights: LightState): List<String> {
 private fun lightModeBrush(mode: String): Brush = when (mode) {
     "swim" -> Brush.sweepGradient(
         listOf(
-            Color(0xFF0EA5E9),
-            Color(0xFFEFF6FF),
+            Color(0xFF0B6FA3),
+            Color(0xFFB6E8F3),
             Color(0xFF1D4ED8),
-            Color(0xFF14B8A6),
-            Color(0xFF0EA5E9),
+            Color(0xFF0F8F82),
+            Color(0xFF0B6FA3),
         )
     )
     "party" -> Brush.sweepGradient(
         listOf(
-            Color(0xFFEF4444),
-            Color(0xFFEAB308),
-            Color(0xFF22C55E),
-            Color(0xFF3B82F6),
-            Color(0xFFA855F7),
-            Color(0xFFEF4444),
+            Color(0xFFD9485F),
+            Color(0xFFD9A400),
+            Color(0xFF1D9B57),
+            Color(0xFF346FD1),
+            Color(0xFF8C4AD8),
+            Color(0xFFD9485F),
         )
     )
-    "romantic" -> Brush.linearGradient(listOf(Color(0xFFEC4899), Color(0xFFF59E0B)))
-    "caribbean" -> Brush.linearGradient(listOf(Color(0xFF06B6D4), Color(0xFF2DD4BF)))
-    "american" -> Brush.linearGradient(listOf(Color(0xFFEF4444), Color(0xFFEFF6FF), Color(0xFF3B82F6)))
-    "sunset" -> Brush.linearGradient(listOf(Color(0xFFF97316), Color(0xFFDC2626)))
-    "royal" -> Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF3B82F6)))
-    "blue" -> Brush.linearGradient(listOf(Color(0xFF3B82F6), Color(0xFF3B82F6)))
-    "green" -> Brush.linearGradient(listOf(Color(0xFF22C55E), Color(0xFF22C55E)))
-    "red" -> Brush.linearGradient(listOf(Color(0xFFEF4444), Color(0xFFEF4444)))
-    "white" -> Brush.radialGradient(listOf(Color(0xFFFFFFFF), Color(0xFFCBD5E1)))
-    "purple" -> Brush.linearGradient(listOf(Color(0xFFA855F7), Color(0xFFA855F7)))
-    else -> Brush.linearGradient(listOf(Color(0xFF38BDF8), Color(0xFF38BDF8)))
+    "romantic" -> Brush.linearGradient(listOf(Color(0xFFD84E8B), Color(0xFFCF7A20)))
+    "caribbean" -> Brush.linearGradient(listOf(Color(0xFF0E7490), Color(0xFF1AAE9F)))
+    "american" -> Brush.linearGradient(listOf(Color(0xFFD9485F), Color(0xFFE6EEF7), Color(0xFF346FD1)))
+    "sunset" -> Brush.linearGradient(listOf(Color(0xFFD97706), Color(0xFFB91C1C)))
+    "royal" -> Brush.linearGradient(listOf(Color(0xFF6D28D9), Color(0xFF346FD1)))
+    "blue" -> Brush.linearGradient(listOf(Color(0xFF346FD1), Color(0xFF346FD1)))
+    "green" -> Brush.linearGradient(listOf(Color(0xFF1D9B57), Color(0xFF1D9B57)))
+    "red" -> Brush.linearGradient(listOf(Color(0xFFD9485F), Color(0xFFD9485F)))
+    "white" -> Brush.radialGradient(listOf(Color(0xFFF8FAFC), Color(0xFFCBD5E1)))
+    "purple" -> Brush.linearGradient(listOf(Color(0xFF8C4AD8), Color(0xFF8C4AD8)))
+    else -> Brush.linearGradient(listOf(Color(0xFF2B8FC9), Color(0xFF2B8FC9)))
 }

@@ -1,76 +1,121 @@
 import Foundation
+import Network
 
-final class BonjourDiscovery: NSObject {
+@MainActor
+final class BonjourDiscovery {
     var onResolvedURL: ((URL) -> Void)?
     var onStatusMessage: ((String) -> Void)?
     var onEvent: ((String) -> Void)?
 
-    private let browser = NetServiceBrowser()
-    private var services: [NetService] = []
+    private var browser: NWBrowser?
     private var resolvedURLs = Set<String>()
-
-    override init() {
-        super.init()
-        browser.delegate = self
-    }
+    private var activeConnections: [NWConnection] = []
 
     func start() {
         stop()
-        browser.searchForServices(ofType: "_pentair._tcp.", inDomain: "local.")
+
+        let params = NWParameters.tcp
+        let browser = NWBrowser(for: .bonjour(type: "_pentair._tcp", domain: "local."), using: params)
+
+        browser.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    self.onStatusMessage?("Searching nearby daemons.")
+                    self.onEvent?("Bonjour browser started.")
+                case .failed(let error):
+                    self.onStatusMessage?("Bonjour search failed.")
+                    self.onEvent?("Bonjour search failed: \(error)")
+                default:
+                    break
+                }
+            }
+        }
+
+        browser.browseResultsChangedHandler = { [weak self] results, changes in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for change in changes {
+                    if case .added(let result) = change {
+                        self.onEvent?("Found service: \(result.endpoint)")
+                        self.resolve(endpoint: result.endpoint)
+                    }
+                }
+            }
+        }
+
+        self.browser = browser
+        browser.start(queue: .main)
         onStatusMessage?("Browsing for Pentair daemons on your network.")
         onEvent?("Started Bonjour browse for _pentair._tcp.local.")
     }
 
     func stop() {
-        browser.stop()
-        services.forEach { $0.stop() }
-        services.removeAll()
+        browser?.cancel()
+        browser = nil
+        for connection in activeConnections {
+            connection.cancel()
+        }
+        activeConnections.removeAll()
         resolvedURLs.removeAll()
     }
-}
 
-extension BonjourDiscovery: NetServiceBrowserDelegate {
-    func netServiceBrowserWillSearch(_ browser: NetServiceBrowser) {
-        onStatusMessage?("Searching nearby daemons.")
-        onEvent?("Bonjour browser started.")
-    }
+    private func resolve(endpoint: NWEndpoint) {
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        activeConnections.append(connection)
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
-        onEvent?("Found service \(service.name) type \(service.type) domain \(service.domain)")
-        service.delegate = self
-        services.append(service)
-        service.resolve(withTimeout: 5)
-    }
+        connection.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch state {
+                case .ready:
+                    if let remoteEndpoint = connection.currentPath?.remoteEndpoint,
+                       case .hostPort(let host, let port) = remoteEndpoint {
+                        let hostString = "\(host)"
+                            .replacingOccurrences(of: "%.*", with: "", options: .regularExpression)
+                        let urlHost = hostString.contains(":") ? "[\(hostString)]" : hostString
+                        let portInt = port.rawValue
+                        let urlString = "http://\(urlHost):\(portInt)"
 
-    func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-        onStatusMessage?("Bonjour search failed.")
-        onEvent?("Bonjour search failed: \(errorDict)")
-    }
-}
+                        guard self.resolvedURLs.insert(urlString).inserted else {
+                            self.onEvent?("Ignoring duplicate resolved URL \(urlString)")
+                            connection.cancel()
+                            self.removeConnection(connection)
+                            return
+                        }
 
-extension BonjourDiscovery: NetServiceDelegate {
-    func netServiceDidResolveAddress(_ sender: NetService) {
-        guard
-            let host = sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: ".")),
-            sender.port > 0,
-            let url = URL(string: "http://\(host):\(sender.port)")
-        else {
-            onEvent?("Resolved service \(sender.name) but host or port was missing.")
-            return
+                        if let url = URL(string: urlString) {
+                            self.onEvent?("Resolved \(endpoint) to \(urlString)")
+                            self.onResolvedURL?(url)
+                        } else {
+                            self.onEvent?("Resolved endpoint but could not form URL from \(urlString)")
+                        }
+                    } else {
+                        self.onEvent?("Connection ready but no remote endpoint available.")
+                    }
+                    connection.cancel()
+                    self.removeConnection(connection)
+
+                case .failed(let error):
+                    self.onStatusMessage?("Found a daemon but could not resolve its address.")
+                    self.onEvent?("Failed resolving \(endpoint): \(error)")
+                    connection.cancel()
+                    self.removeConnection(connection)
+
+                case .cancelled:
+                    self.removeConnection(connection)
+
+                default:
+                    break
+                }
+            }
         }
 
-        let normalized = url.absoluteString
-        guard resolvedURLs.insert(normalized).inserted else {
-            onEvent?("Ignoring duplicate resolved URL \(normalized)")
-            return
-        }
-
-        onEvent?("Resolved \(sender.name) to \(normalized)")
-        onResolvedURL?(url)
+        connection.start(queue: .main)
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
-        onStatusMessage?("Found a daemon but could not resolve its address.")
-        onEvent?("Failed resolving \(sender.name): \(errorDict)")
+    private func removeConnection(_ connection: NWConnection) {
+        activeConnections.removeAll { $0 === connection }
     }
 }

@@ -33,9 +33,12 @@ fun SetpointBottomSheet(
     currentSetpoint: Int,
     onSet: (Int) -> Unit,
     onDismiss: () -> Unit,
+    range: IntRange,
 ) {
     var tempValue by remember { mutableIntStateOf(currentSetpoint) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val minTemp = range.first
+    val maxTemp = range.last
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -66,7 +69,7 @@ fun SetpointBottomSheet(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 OutlinedButton(
-                    onClick = { tempValue = (tempValue - 1).coerceAtLeast(40) },
+                    onClick = { tempValue = (tempValue - 1).coerceAtLeast(minTemp) },
                 ) {
                     Text("\u2212")
                 }
@@ -74,7 +77,7 @@ fun SetpointBottomSheet(
                 Spacer(modifier = Modifier.width(16.dp))
 
                 OutlinedButton(
-                    onClick = { tempValue = (tempValue + 1).coerceAtMost(104) },
+                    onClick = { tempValue = (tempValue + 1).coerceAtMost(maxTemp) },
                 ) {
                     Text("+")
                 }

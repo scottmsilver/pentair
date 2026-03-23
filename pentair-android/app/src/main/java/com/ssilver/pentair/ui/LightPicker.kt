@@ -61,8 +61,18 @@ private val lightModes = listOf(
     LightMode("purple", Brush.linearGradient(listOf(Color(0xFFA855F7), Color(0xFFA855F7)))),
 )
 
+private val defaultBrush = Brush.linearGradient(listOf(Color(0xFF9CA3AF), Color(0xFF6B7280)))
+
 private fun getModebrush(mode: String): Brush? {
     return lightModes.find { it.key == mode }?.brush
+}
+
+/** Return the preferred modes in order, plus any unknown modes from [availableModes] appended at the end. */
+private fun orderedModes(availableModes: List<String>?): List<LightMode> {
+    if (availableModes == null) return lightModes
+    val knownKeys = lightModes.map { it.key }.toSet()
+    val extras = availableModes.filter { it !in knownKeys }.map { LightMode(it, defaultBrush) }
+    return lightModes + extras
 }
 
 @Composable
@@ -185,7 +195,7 @@ fun LightPicker(
                 }
 
                 // Color swatches
-                lightModes.forEach { mode ->
+                orderedModes(lights?.available_modes).forEach { mode ->
                     Spacer(Modifier.width(6.dp))
                     val isSelected = currentMode == mode.key
                     Box(

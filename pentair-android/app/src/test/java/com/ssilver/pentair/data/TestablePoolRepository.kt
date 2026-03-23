@@ -51,7 +51,7 @@ class TestablePoolRepository(
         synchronized(stateLock) {
             val current = _state.value ?: return
             _state.value = mutate(current)
-            _pendingChanges.add(PendingChange(description, verify))
+            _pendingChanges.add(PendingChange(description, mutate, verify))
         }
     }
 
