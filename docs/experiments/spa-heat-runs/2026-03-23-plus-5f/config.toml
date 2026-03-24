@@ -1,0 +1,24 @@
+adapter_host = ""
+bind = "127.0.0.1:8083"
+
+[heating]
+enabled = true
+history_path = "/home/ssilver/development/pentair/docs/experiments/spa-heat-runs/2026-03-23-plus-5f/heat-estimator-store.json"
+sample_window_minutes = 180
+minimum_runtime_minutes = 0
+minimum_temp_rise_f = 0.0
+shared_equipment_temp_warmup_seconds = 120
+
+[heating.heater]
+kind = "heat-pump"
+output_btu_per_hr = 140000
+efficiency = 1.0
+
+[heating.pool]
+volume_gallons = 16000
+
+[heating.spa.dimensions]
+length_ft = 8
+width_ft = 8
+depth_ft = 4
+shape_factor = 1.0

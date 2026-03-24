@@ -189,14 +189,14 @@ pub fn build_set_schedule_event(
     let wire_schedule = schedule_id + 699;
     let wire_circuit = circuit_id + 499;
     let payload = payload_i32s(&[
-        0,              // param
-        wire_schedule,  // schedule_id on wire
-        wire_circuit,   // circuit_id on wire
+        0,             // param
+        wire_schedule, // schedule_id on wire
+        wire_circuit,  // circuit_id on wire
         start_time,
         stop_time,
         day_mask,
-        2,              // flags (default)
-        4,              // heat_cmd (default)
+        2, // flags (default)
+        4, // heat_cmd (default)
         heat_set_point,
     ]);
     encode_message(u16::from(Action::SetScheduleEvent), &payload)
@@ -265,7 +265,10 @@ mod tests {
         let wire_circuit = cursor.read_i32le().unwrap();
         let state = cursor.read_i32le().unwrap();
         assert_eq!(controller_id, 0);
-        assert_eq!(wire_circuit, 500, "circuit_id 1 should become 500 on wire (1+499)");
+        assert_eq!(
+            wire_circuit, 500,
+            "circuit_id 1 should become 500 on wire (1+499)"
+        );
         assert_eq!(state, 1);
     }
 
@@ -279,7 +282,10 @@ mod tests {
         let param = cursor.read_i32le().unwrap();
         let wire_schedule = cursor.read_i32le().unwrap();
         assert_eq!(param, 0);
-        assert_eq!(wire_schedule, 700, "schedule_id 1 should become 700 on wire (1+699)");
+        assert_eq!(
+            wire_schedule, 700,
+            "schedule_id 1 should become 700 on wire (1+699)"
+        );
     }
 
     // ── 4. Set schedule event offsets ─────────────────────────────────
@@ -300,8 +306,14 @@ mod tests {
         let heat_set_point = cursor.read_i32le().unwrap();
 
         assert_eq!(param, 0);
-        assert_eq!(wire_schedule, 700, "schedule_id 1 should become 700 on wire (1+699)");
-        assert_eq!(wire_circuit, 501, "circuit_id 2 should become 501 on wire (2+499)");
+        assert_eq!(
+            wire_schedule, 700,
+            "schedule_id 1 should become 700 on wire (1+699)"
+        );
+        assert_eq!(
+            wire_circuit, 501,
+            "circuit_id 2 should become 501 on wire (2+499)"
+        );
         assert_eq!(start_time, 480);
         assert_eq!(stop_time, 960);
         assert_eq!(day_mask, 0x7F);

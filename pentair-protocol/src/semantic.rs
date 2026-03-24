@@ -36,8 +36,35 @@ pub struct HeatEstimate {
     pub source: String,
     pub reason: String,
     pub observed_rate_per_hour: Option<f64>,
+    pub learned_rate_per_hour: Option<f64>,
     pub configured_rate_per_hour: Option<f64>,
+    pub baseline_rate_per_hour: Option<f64>,
     pub updated_at_unix_ms: i64,
+}
+
+/// UI-oriented server display contract for body temperature presentation.
+#[derive(Debug, Clone, Serialize)]
+pub struct TemperatureDisplay {
+    pub value: Option<i32>,
+    pub is_stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stale_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reliable_at_unix_ms: Option<i64>,
+}
+
+/// UI-oriented server display contract for heat estimate presentation.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeatEstimateDisplay {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub available_in_seconds: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minutes_remaining: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_temperature: Option<i32>,
 }
 
 /// Pool body — on/off, temperature, heating.
@@ -50,11 +77,20 @@ pub struct BodyState {
     /// and the pump hasn't ramped up yet, or something is wrong.
     pub active: bool,
     pub temperature: i32,
+    pub temperature_reliable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reliable_temperature: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reliable_temperature_at_unix_ms: Option<i64>,
     pub setpoint: i32,
     pub heat_mode: String,
     pub heating: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heat_estimate: Option<HeatEstimate>,
+    pub temperature_display: TemperatureDisplay,
+    pub heat_estimate_display: HeatEstimateDisplay,
 }
 
 /// Spa body — everything pool has, plus accessories like jets.
@@ -65,11 +101,20 @@ pub struct SpaState {
     /// Water is actually flowing (circuit on AND pump running with RPM > 0).
     pub active: bool,
     pub temperature: i32,
+    pub temperature_reliable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reliable_temperature: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_reliable_temperature_at_unix_ms: Option<i64>,
     pub setpoint: i32,
     pub heat_mode: String,
     pub heating: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heat_estimate: Option<HeatEstimate>,
+    pub temperature_display: TemperatureDisplay,
+    pub heat_estimate_display: HeatEstimateDisplay,
     /// Spa accessories (jets, blower, etc.) keyed by slug ID.
     pub accessories: HashMap<String, bool>,
 }
@@ -305,10 +350,27 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             on,
             active: on && pump_flowing,
             temperature: body.current_temp,
+            temperature_reliable: true,
+            temperature_reason: None,
+            last_reliable_temperature: None,
+            last_reliable_temperature_at_unix_ms: None,
             setpoint: body.set_point,
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
             heat_estimate: None,
+            temperature_display: TemperatureDisplay {
+                value: Some(body.current_temp),
+                is_stale: false,
+                stale_reason: None,
+                last_reliable_at_unix_ms: None,
+            },
+            heat_estimate_display: HeatEstimateDisplay {
+                state: "unavailable".to_string(),
+                reason: Some("not-heating".to_string()),
+                available_in_seconds: None,
+                minutes_remaining: None,
+                target_temperature: None,
+            },
         }
     });
 
@@ -325,10 +387,27 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             on,
             active: on && pump_flowing,
             temperature: body.current_temp,
+            temperature_reliable: true,
+            temperature_reason: None,
+            last_reliable_temperature: None,
+            last_reliable_temperature_at_unix_ms: None,
             setpoint: body.set_point,
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
             heat_estimate: None,
+            temperature_display: TemperatureDisplay {
+                value: Some(body.current_temp),
+                is_stale: false,
+                stale_reason: None,
+                last_reliable_at_unix_ms: None,
+            },
+            heat_estimate_display: HeatEstimateDisplay {
+                state: "unavailable".to_string(),
+                reason: Some("not-heating".to_string()),
+                available_in_seconds: None,
+                minutes_remaining: None,
+                target_temperature: None,
+            },
             accessories,
         }
     });

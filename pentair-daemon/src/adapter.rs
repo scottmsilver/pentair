@@ -1,12 +1,14 @@
 use crate::fcm::FcmSender;
 use crate::state::SharedState;
+use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Timelike};
 use pentair_client::client::Client;
 use pentair_client::discovery::discover;
 use pentair_protocol::semantic::PoolSystem;
+use pentair_protocol::types::SLDateTime;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Commands sent from the API to the adapter task
 pub enum AdapterCommand {
@@ -125,7 +127,7 @@ pub async fn run_adapter(
                             previous_system = current;
                         }
                         _ = refresh_interval.tick() => {
-                            if let Err(e) = refresh_status(&mut client, &state).await {
+                            if let Err(e) = refresh_runtime_state(&mut client, &state).await {
                                 error!("refresh failed: {}", e);
                                 break;
                             }
@@ -179,7 +181,7 @@ async fn handle_command(
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
-                let _ = refresh_status(client, state).await;
+                let _ = refresh_runtime_state(client, state).await;
                 let _ = push_tx.send(PushEvent::StatusChanged);
                 Ok(())
             } else {
@@ -195,7 +197,7 @@ async fn handle_command(
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
-                let _ = refresh_status(client, state).await;
+                let _ = refresh_runtime_state(client, state).await;
                 let _ = push_tx.send(PushEvent::StatusChanged);
                 Ok(())
             } else {
@@ -211,7 +213,7 @@ async fn handle_command(
             let ok = result.is_ok();
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
-                let _ = refresh_status(client, state).await;
+                let _ = refresh_runtime_state(client, state).await;
                 let _ = push_tx.send(PushEvent::StatusChanged);
                 Ok(())
             } else {
@@ -297,7 +299,7 @@ async fn handle_command(
 }
 
 async fn refresh_all(client: &mut Client, state: &SharedState) {
-    let _ = refresh_status(client, state).await;
+    let _ = refresh_runtime_state(client, state).await;
 
     if let Ok(config) = client.get_controller_config().await {
         state.write().await.config = Some(config);
@@ -311,26 +313,117 @@ async fn refresh_all(client: &mut Client, state: &SharedState) {
     if let Ok(version) = client.get_version().await {
         state.write().await.version = Some(version);
     }
-    // All pumps (needed for topology discovery)
+
+    // Rebuild semantic model + circuit map after full refresh
+    state.write().await.refresh_semantic_state();
+    backfill_last_reliable_from_history(client, state).await;
+}
+
+async fn refresh_runtime_state(
+    client: &mut Client,
+    state: &SharedState,
+) -> Result<(), pentair_client::error::ClientError> {
+    let status = client.get_status().await?;
+    {
+        let mut guard = state.write().await;
+        guard.status = Some(status);
+    }
+
+    refresh_pumps(client, state).await;
+
+    let mut guard = state.write().await;
+    guard.refresh_semantic_state();
+    Ok(())
+}
+
+async fn refresh_pumps(client: &mut Client, state: &SharedState) {
     for i in 0..8 {
         if let Ok(pump) = client.get_pump_status(i).await {
             state.write().await.pumps[i as usize] = Some(pump);
         }
     }
-
-    // Rebuild semantic model + circuit map after full refresh
-    state.write().await.refresh_semantic_state();
 }
 
-async fn refresh_status(
-    client: &mut Client,
-    state: &SharedState,
-) -> Result<(), pentair_client::error::ClientError> {
-    let status = client.get_status().await?;
-    let mut guard = state.write().await;
-    guard.status = Some(status);
-    guard.refresh_semantic_state();
-    Ok(())
+async fn backfill_last_reliable_from_history(client: &mut Client, state: &SharedState) {
+    let Ok(system_time) = client.get_system_time().await else {
+        warn!("failed to fetch controller time for history backfill");
+        return;
+    };
+    let Ok(end) = sl_to_naive(&system_time.time) else {
+        warn!("failed to parse controller time for history backfill");
+        return;
+    };
+    let start = end - ChronoDuration::hours(48);
+    let Ok(start_sl) = naive_to_sl(&start) else {
+        warn!("failed to build history start time for backfill");
+        return;
+    };
+
+    let Ok(history) = client
+        .get_history(&start_sl, &system_time.time, client.client_id())
+        .await
+    else {
+        warn!("failed to fetch controller history for backfill");
+        return;
+    };
+
+    let pool_spa_shared_pump = state
+        .read()
+        .await
+        .pool_system()
+        .map(|system| system.system.pool_spa_shared_pump)
+        .unwrap_or(false);
+
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    state
+        .write()
+        .await
+        .heat
+        .seed_last_reliable_from_controller_history(
+            &history,
+            &system_time.time,
+            now_unix_ms,
+            pool_spa_shared_pump,
+        );
+}
+
+fn sl_to_naive(time: &SLDateTime) -> Result<NaiveDateTime, ()> {
+    let Some(date) = NaiveDate::from_ymd_opt(time.year as i32, time.month as u32, time.day as u32)
+    else {
+        return Err(());
+    };
+    date.and_hms_milli_opt(
+        time.hour as u32,
+        time.minute as u32,
+        time.second as u32,
+        time.millisecond as u32,
+    )
+    .ok_or(())
+}
+
+fn naive_to_sl(dt: &NaiveDateTime) -> Result<SLDateTime, ()> {
+    Ok(SLDateTime {
+        year: dt.year().try_into().map_err(|_| ())?,
+        month: dt.month().try_into().map_err(|_| ())?,
+        day_of_week: dt
+            .weekday()
+            .num_days_from_sunday()
+            .try_into()
+            .map_err(|_| ())?,
+        day: dt.day().try_into().map_err(|_| ())?,
+        hour: dt.hour().try_into().map_err(|_| ())?,
+        minute: dt.minute().try_into().map_err(|_| ())?,
+        second: dt.second().try_into().map_err(|_| ())?,
+        millisecond: dt
+            .and_utc()
+            .timestamp_subsec_millis()
+            .try_into()
+            .map_err(|_| ())?,
+    })
 }
 
 // ─── FCM event detection ────────────────────────────────────────────────

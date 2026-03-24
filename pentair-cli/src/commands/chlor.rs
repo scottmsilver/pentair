@@ -10,7 +10,10 @@ pub async fn show(backend: &mut Backend, json: bool) -> Result<(), Box<dyn std::
     }
 
     println!("Chlorinator:");
-    println!("  Installed:        {}", if scg.installed { "Yes" } else { "No" });
+    println!(
+        "  Installed:        {}",
+        if scg.installed { "Yes" } else { "No" }
+    );
     println!("  Status:           {}", scg.status);
     println!("  Pool Set Point:   {}%", scg.pool_set_point);
     println!("  Spa Set Point:    {}%", scg.spa_set_point);

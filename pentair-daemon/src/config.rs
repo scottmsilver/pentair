@@ -47,6 +47,8 @@ pub struct HeatingConfig {
     pub minimum_runtime_minutes: u64,
     #[serde(default = "default_minimum_temp_rise_f")]
     pub minimum_temp_rise_f: f64,
+    #[serde(default = "default_shared_equipment_temp_warmup_seconds")]
+    pub shared_equipment_temp_warmup_seconds: u64,
     #[serde(default)]
     pub heater: HeaterConfig,
     #[serde(default)]
@@ -69,6 +71,20 @@ pub struct HeaterConfig {
 pub struct BodyHeatingConfig {
     #[serde(default)]
     pub volume_gallons: Option<f64>,
+    #[serde(default)]
+    pub dimensions: Option<BodyDimensionsConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BodyDimensionsConfig {
+    #[serde(default)]
+    pub length_ft: Option<f64>,
+    #[serde(default)]
+    pub width_ft: Option<f64>,
+    #[serde(default, alias = "depth_ft")]
+    pub average_depth_ft: Option<f64>,
+    #[serde(default = "default_shape_factor")]
+    pub shape_factor: f64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -94,6 +110,12 @@ fn default_minimum_runtime_minutes() -> u64 {
     10
 }
 fn default_minimum_temp_rise_f() -> f64 {
+    1.0
+}
+fn default_shared_equipment_temp_warmup_seconds() -> u64 {
+    120
+}
+fn default_shape_factor() -> f64 {
     1.0
 }
 
@@ -128,9 +150,49 @@ impl Default for HeatingConfig {
             sample_window_minutes: default_sample_window_minutes(),
             minimum_runtime_minutes: default_minimum_runtime_minutes(),
             minimum_temp_rise_f: default_minimum_temp_rise_f(),
+            shared_equipment_temp_warmup_seconds: default_shared_equipment_temp_warmup_seconds(),
             heater: Default::default(),
             pool: Default::default(),
             spa: Default::default(),
         }
+    }
+}
+
+impl Default for BodyDimensionsConfig {
+    fn default() -> Self {
+        Self {
+            length_ft: None,
+            width_ft: None,
+            average_depth_ft: None,
+            shape_factor: default_shape_factor(),
+        }
+    }
+}
+
+impl BodyHeatingConfig {
+    pub fn effective_volume_gallons(&self) -> Option<f64> {
+        self.volume_gallons.or_else(|| {
+            self.dimensions
+                .as_ref()
+                .and_then(BodyDimensionsConfig::volume_gallons)
+        })
+    }
+}
+
+impl BodyDimensionsConfig {
+    pub fn volume_gallons(&self) -> Option<f64> {
+        let length_ft = self.length_ft?;
+        let width_ft = self.width_ft?;
+        let average_depth_ft = self.average_depth_ft?;
+
+        if length_ft <= 0.0 || width_ft <= 0.0 || average_depth_ft <= 0.0 {
+            return None;
+        }
+
+        let shape_factor = self.shape_factor.max(0.0);
+        let cubic_feet = length_ft * width_ft * average_depth_ft * shape_factor;
+        let gallons = cubic_feet * 7.48;
+
+        (gallons.is_finite() && gallons > 0.0).then_some(gallons)
     }
 }

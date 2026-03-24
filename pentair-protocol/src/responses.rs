@@ -565,6 +565,75 @@ pub fn parse_schedule_data(payload: &[u8]) -> Result<ScheduleData> {
     Ok(ScheduleData { events })
 }
 
+// ── History Data ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TimeTempPoint {
+    pub time: SLDateTime,
+    pub temp: i32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TimeRangePoint {
+    pub on: SLDateTime,
+    pub off: SLDateTime,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryData {
+    pub air_temps: Vec<TimeTempPoint>,
+    pub pool_temps: Vec<TimeTempPoint>,
+    pub pool_set_point_temps: Vec<TimeTempPoint>,
+    pub spa_temps: Vec<TimeTempPoint>,
+    pub spa_set_point_temps: Vec<TimeTempPoint>,
+    pub pool_runs: Vec<TimeRangePoint>,
+    pub spa_runs: Vec<TimeRangePoint>,
+    pub solar_runs: Vec<TimeRangePoint>,
+    pub heater_runs: Vec<TimeRangePoint>,
+    pub light_runs: Vec<TimeRangePoint>,
+}
+
+fn parse_time_temp_points(cursor: &mut Cursor<'_>) -> Result<Vec<TimeTempPoint>> {
+    let count = cursor.read_i32le()?.max(0) as usize;
+    let mut points = Vec::with_capacity(count);
+    for _ in 0..count {
+        points.push(TimeTempPoint {
+            time: decode_sl_datetime(cursor)?,
+            temp: cursor.read_i32le()?,
+        });
+    }
+    Ok(points)
+}
+
+fn parse_time_range_points(cursor: &mut Cursor<'_>) -> Result<Vec<TimeRangePoint>> {
+    let count = cursor.read_i32le()?.max(0) as usize;
+    let mut points = Vec::with_capacity(count);
+    for _ in 0..count {
+        points.push(TimeRangePoint {
+            on: decode_sl_datetime(cursor)?,
+            off: decode_sl_datetime(cursor)?,
+        });
+    }
+    Ok(points)
+}
+
+pub fn parse_history_data(payload: &[u8]) -> Result<HistoryData> {
+    let mut cursor = Cursor::new(payload);
+
+    Ok(HistoryData {
+        air_temps: parse_time_temp_points(&mut cursor)?,
+        pool_temps: parse_time_temp_points(&mut cursor)?,
+        pool_set_point_temps: parse_time_temp_points(&mut cursor)?,
+        spa_temps: parse_time_temp_points(&mut cursor)?,
+        spa_set_point_temps: parse_time_temp_points(&mut cursor)?,
+        pool_runs: parse_time_range_points(&mut cursor)?,
+        spa_runs: parse_time_range_points(&mut cursor)?,
+        solar_runs: parse_time_range_points(&mut cursor)?,
+        heater_runs: parse_time_range_points(&mut cursor)?,
+        light_runs: parse_time_range_points(&mut cursor)?,
+    })
+}
+
 // ── Weather Response ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -678,7 +747,10 @@ pub fn parse_discovery(payload: &[u8]) -> Result<DiscoveryResponse> {
     let remaining = cursor.remaining();
     let name_bytes = cursor.read_bytes(remaining)?;
     // Null-terminated string
-    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+    let end = name_bytes
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(name_bytes.len());
     let adapter_name = String::from_utf8_lossy(&name_bytes[..end]).into_owned();
 
     Ok(DiscoveryResponse {
@@ -1005,6 +1077,67 @@ mod tests {
     }
 
     #[test]
+    fn history_data_roundtrip_shape() {
+        use crate::types::encode_sl_datetime;
+
+        let dt = SLDateTime {
+            year: 2026,
+            month: 3,
+            day_of_week: 2,
+            day: 24,
+            hour: 8,
+            minute: 0,
+            second: 0,
+            millisecond: 0,
+        };
+        let dt2 = SLDateTime {
+            hour: 9,
+            ..dt.clone()
+        };
+
+        let mut payload = Vec::new();
+        let push_time_temp = |buf: &mut Vec<u8>, points: &[(&SLDateTime, i32)]| {
+            buf.extend_from_slice(&(points.len() as i32).to_le_bytes());
+            for (time, temp) in points {
+                buf.extend(encode_sl_datetime(time));
+                buf.extend_from_slice(&temp.to_le_bytes());
+            }
+        };
+        let push_time_range = |buf: &mut Vec<u8>, points: &[(&SLDateTime, &SLDateTime)]| {
+            buf.extend_from_slice(&(points.len() as i32).to_le_bytes());
+            for (on, off) in points {
+                buf.extend(encode_sl_datetime(on));
+                buf.extend(encode_sl_datetime(off));
+            }
+        };
+
+        push_time_temp(&mut payload, &[(&dt, 64)]);
+        push_time_temp(&mut payload, &[(&dt, 72)]);
+        push_time_temp(&mut payload, &[(&dt, 80)]);
+        push_time_temp(&mut payload, &[(&dt, 86)]);
+        push_time_temp(&mut payload, &[(&dt, 104)]);
+        push_time_range(&mut payload, &[(&dt, &dt2)]);
+        push_time_range(&mut payload, &[(&dt, &dt2)]);
+        push_time_range(&mut payload, &[]);
+        push_time_range(&mut payload, &[(&dt, &dt2)]);
+        push_time_range(&mut payload, &[]);
+
+        let history = parse_history_data(&payload).unwrap();
+        assert_eq!(history.air_temps.len(), 1);
+        assert_eq!(history.air_temps[0].temp, 64);
+        assert_eq!(history.pool_temps[0].temp, 72);
+        assert_eq!(history.pool_set_point_temps[0].temp, 80);
+        assert_eq!(history.spa_temps[0].temp, 86);
+        assert_eq!(history.spa_set_point_temps[0].temp, 104);
+        assert_eq!(history.pool_runs.len(), 1);
+        assert_eq!(history.pool_runs[0].on, dt);
+        assert_eq!(history.pool_runs[0].off, dt2);
+        assert_eq!(history.heater_runs.len(), 1);
+        assert!(history.solar_runs.is_empty());
+        assert!(history.light_runs.is_empty());
+    }
+
+    #[test]
     fn version_empty_string() {
         // SLString with length 0
         let payload = 0u32.to_le_bytes();
@@ -1035,7 +1168,7 @@ mod tests {
         payload.extend_from_slice(&72i32.to_le_bytes()); // air_temp
         payload.extend_from_slice(&0i32.to_le_bytes()); // body_count = 0
         payload.extend_from_slice(&0i32.to_le_bytes()); // circuit_count = 0
-        // 7 × i32 for chemistry
+                                                        // 7 × i32 for chemistry
         for _ in 0..7 {
             payload.extend_from_slice(&0i32.to_le_bytes());
         }

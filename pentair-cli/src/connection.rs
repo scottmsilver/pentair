@@ -6,7 +6,9 @@ use crate::backend::Backend;
 /// Resolve the adapter address: --host flag / PENTAIR_HOST env -> auto-discovery.
 /// Then connect, performing the full login handshake.
 /// Returns a Backend::Direct wrapping the TCP client.
-pub async fn resolve_and_connect(host: Option<&str>) -> Result<Backend, Box<dyn std::error::Error>> {
+pub async fn resolve_and_connect(
+    host: Option<&str>,
+) -> Result<Backend, Box<dyn std::error::Error>> {
     let addr = match host {
         Some(h) => {
             // If no port specified, default to :80

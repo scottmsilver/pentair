@@ -21,9 +21,22 @@ Returns the complete pool system state in a single call. This is the only endpoi
   "pool": {
     "on": false,
     "temperature": 99,
+    "temperature_reliable": true,
+    "last_reliable_temperature": 99,
+    "last_reliable_temperature_at_unix_ms": 1774311705123,
     "setpoint": 59,
     "heat_mode": "heat-pump",
     "heating": "off",
+    "temperature_display": {
+      "value": 99,
+      "is_stale": false,
+      "last_reliable_at_unix_ms": 1774311705123
+    },
+    "heat_estimate_display": {
+      "state": "unavailable",
+      "reason": "not-heating",
+      "target_temperature": 59
+    },
     "heat_estimate": {
       "available": false,
       "minutes_remaining": null,
@@ -38,19 +51,33 @@ Returns the complete pool system state in a single call. This is the only endpoi
   "spa": {
     "on": false,
     "temperature": 103,
+    "temperature_reliable": false,
+    "temperature_reason": "inactive-shared-body",
+    "last_reliable_temperature": 100,
+    "last_reliable_temperature_at_unix_ms": 1774311105123,
     "setpoint": 104,
     "heat_mode": "heat-pump",
     "heating": "off",
+    "temperature_display": {
+      "value": 100,
+      "is_stale": true,
+      "stale_reason": "inactive-shared-body",
+      "last_reliable_at_unix_ms": 1774311105123
+    },
+    "heat_estimate_display": {
+      "state": "pending",
+      "reason": "sensor-warmup",
+      "available_in_seconds": 73,
+      "target_temperature": 104
+    },
     "heat_estimate": {
-      "available": true,
-      "minutes_remaining": 18,
+      "available": false,
+      "minutes_remaining": null,
       "current_temperature": 103,
       "target_temperature": 104,
-      "confidence": "low",
-      "source": "configured",
-      "reason": "estimating",
-      "observed_rate_per_hour": null,
-      "configured_rate_per_hour": 9.7,
+      "confidence": "none",
+      "source": "none",
+      "reason": "sensor-warmup",
       "updated_at_unix_ms": 1774311705123
     },
     "accessories": {
@@ -102,7 +129,32 @@ Returns the complete pool system state in a single call. This is the only endpoi
 | `system.pool_spa_shared_pump` | Auto-detected from pump speed tables. If `true`, pool and spa are mutually exclusive |
 | `pool.heat_mode` | One of: `off`, `solar`, `solar-preferred`, `heat-pump` |
 | `pool.heating` | Current heater status: `off`, `solar`, `heater`, `both` |
+| `pool.temperature_reliable` / `spa.temperature_reliable` | Whether the daemon currently trusts that body's displayed water temperature |
+| `pool.temperature_reason` / `spa.temperature_reason` | Optional explanation when the body temperature is not currently trusted |
+| `pool.last_reliable_temperature` / `spa.last_reliable_temperature` | Last known good water temperature for that body |
+| `pool.last_reliable_temperature_at_unix_ms` / `spa.last_reliable_temperature_at_unix_ms` | Server timestamp for the last trusted temperature sample |
+| `pool.temperature_display` / `spa.temperature_display` | UI-oriented temperature presentation contract. Clients should prefer this over rebuilding stale/live rules themselves. |
+| `pool.heat_estimate_display` / `spa.heat_estimate_display` | UI-oriented heat-estimate presentation contract. Clients should prefer this over rebuilding pending/ready rules themselves. |
 | `pool.heat_estimate` / `spa.heat_estimate` | Server-side estimate for time remaining to reach setpoint. Present when heating estimation is enabled in config. |
+
+**`temperature_display` field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `value` | Temperature clients should display. When stale, this is usually the last trusted reading rather than the raw current body temperature |
+| `is_stale` | Whether the displayed temperature is stale |
+| `stale_reason` | Why the temperature is stale, e.g. `inactive-shared-body`, `waiting-for-flow`, `sensor-warmup` |
+| `last_reliable_at_unix_ms` | Timestamp associated with the displayed temperature value |
+
+**`heat_estimate_display` field notes:**
+
+| Field | Description |
+|-------|-------------|
+| `state` | `ready`, `pending`, or `unavailable` |
+| `reason` | Machine-readable reason for the display state |
+| `available_in_seconds` | Present during fixed-duration pending states such as `sensor-warmup`; clients can render countdown copy from this |
+| `minutes_remaining` | Rounded ETA when `state = ready` |
+| `target_temperature` | Setpoint associated with the estimate |
 
 **`heat_estimate` field notes:**
 
@@ -114,9 +166,11 @@ Returns the complete pool system state in a single call. This is the only endpoi
 | `target_temperature` | Current body setpoint in the system's configured unit |
 | `confidence` | One of `none`, `low`, `medium`, `high` |
 | `source` | One of `none`, `configured`, `learned`, `observed`, `blended` |
-| `reason` | Why the estimate is or is not available: `estimating`, `at-temp`, `heat-off`, `not-heating`, `waiting-for-flow`, `missing-config`, `insufficient-data` |
+| `reason` | Why the estimate is or is not available: `estimating`, `at-temp`, `heat-off`, `not-heating`, `waiting-for-flow`, `sensor-warmup`, `inactive-shared-body`, `missing-config`, `insufficient-data` |
 | `observed_rate_per_hour` | Live observed heating rate in the system's configured unit per hour, when enough session data exists |
+| `learned_rate_per_hour` | Learned baseline heating rate from prior sessions, biased toward sessions in similar air temperatures |
 | `configured_rate_per_hour` | Baseline configured heating rate in the system's configured unit per hour |
+| `baseline_rate_per_hour` | The baseline rate actually used before current-session observation. This blends configured and learned rates when both exist. |
 | `updated_at_unix_ms` | Server timestamp for the estimate calculation |
 
 If the daemon hasn't connected to the adapter yet, returns:
@@ -389,6 +443,7 @@ history_path = "~/.pentair/heat-estimator.json"
 sample_window_minutes = 180
 minimum_runtime_minutes = 10
 minimum_temp_rise_f = 1.0
+shared_equipment_temp_warmup_seconds = 120
 
 [heating.heater]
 kind = "gas"
@@ -399,7 +454,19 @@ efficiency = 0.84
 volume_gallons = 16000
 
 [heating.spa]
-volume_gallons = 500
+[heating.spa.dimensions]
+length_ft = 8
+width_ft = 8
+depth_ft = 4
 ```
 
 `[heating]` is optional. When enabled, the daemon combines configured heater/body sizes with observed heating sessions to estimate time remaining until the pool or spa reaches setpoint.
+
+For each body, you can provide either:
+- `volume_gallons`
+- or `dimensions.length_ft`, `dimensions.width_ft`, and `dimensions.depth_ft` / `dimensions.average_depth_ft`
+
+The daemon converts dimensions to gallons using:
+`length_ft * width_ft * average_depth_ft * 7.48 * shape_factor`
+
+`shape_factor` defaults to `1.0` for rectangular bodies and can be reduced for rounded/freeform shapes.

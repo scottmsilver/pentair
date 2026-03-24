@@ -1,0 +1,16 @@
+{
+  "pool_learned_rate_f_per_hour": null,
+  "spa_learned_rate_f_per_hour": 7.883154137561039,
+  "recent_sessions": [
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774321293158,
+      "ended_at_unix_ms": 1774321749911,
+      "start_temp_f": 91.0,
+      "end_temp_f": 92.0,
+      "target_temp_f": 100.0,
+      "duration_minutes": 7.611166666666667,
+      "average_rate_f_per_hour": 7.883154137561039
+    }
+  ]
+}

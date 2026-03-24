@@ -1,0 +1,36 @@
+{
+  "pool_learned_rate_f_per_hour": null,
+  "spa_learned_rate_f_per_hour": 29.05193725828715,
+  "pool_last_reliable_temperature": {
+    "temperature": 88,
+    "observed_at_unix_ms": 1774386507900
+  },
+  "spa_last_reliable_temperature": {
+    "temperature": 91,
+    "observed_at_unix_ms": 1774385539411
+  },
+  "recent_sessions": [
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774323443921,
+      "ended_at_unix_ms": 1774323807597,
+      "start_temp_f": 94.0,
+      "end_temp_f": 97.0,
+      "target_temp_f": 99.0,
+      "average_air_temp_f": 65.8,
+      "duration_minutes": 6.05985,
+      "average_rate_f_per_hour": 29.703705537265773
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774323965843,
+      "ended_at_unix_ms": 1774324619648,
+      "start_temp_f": 98.0,
+      "end_temp_f": 103.0,
+      "target_temp_f": 103.0,
+      "average_air_temp_f": 65.0,
+      "duration_minutes": 10.89675,
+      "average_rate_f_per_hour": 27.531144607337048
+    }
+  ]
+}

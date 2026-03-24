@@ -15,7 +15,10 @@ pub async fn run(backend: &mut Backend, json: bool) -> Result<(), Box<dyn std::e
     }
 
     println!("Chemistry:");
-    println!("  pH:             {:.2} (set point: {:.2})", chem.ph, chem.ph_set_point);
+    println!(
+        "  pH:             {:.2} (set point: {:.2})",
+        chem.ph, chem.ph_set_point
+    );
     println!(
         "  ORP:            {} mV (set point: {} mV)",
         chem.orp, chem.orp_set_point
@@ -35,10 +38,7 @@ pub async fn run(backend: &mut Backend, json: bool) -> Result<(), Box<dyn std::e
     println!("  pH Supply:      {}", chem.ph_supply_level);
     println!("  ORP Supply:     {}", chem.orp_supply_level);
     println!();
-    println!(
-        "Firmware: {}.{}",
-        chem.fw_major, chem.fw_minor
-    );
+    println!("Firmware: {}.{}", chem.fw_major, chem.fw_minor);
 
     Ok(())
 }

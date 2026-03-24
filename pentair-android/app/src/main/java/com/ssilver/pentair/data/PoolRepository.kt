@@ -307,7 +307,14 @@ class PoolRepository @Inject constructor(
         val turnOn = state == "on"
         applyOptimistic(
             description = "Pool ${if (turnOn) "on" else "off"}",
-            mutate = { sys -> sys.copy(pool = sys.pool?.copy(on = turnOn)) },
+            mutate = { sys ->
+                sys.copy(
+                    pool = sys.pool?.optimisticCommand(
+                        on = turnOn,
+                        sharedPump = sys.system.pool_spa_shared_pump,
+                    )
+                )
+            },
             verify = { sys -> sys.pool?.on == turnOn },
         )
 
@@ -329,21 +336,39 @@ class PoolRepository @Inject constructor(
             "off" -> applyOptimistic(
                 description = "Spa off",
                 mutate = { sys ->
-                    sys.copy(spa = sys.spa?.copy(on = false, accessories = sys.spa.accessories.mapValues { false }))
+                    sys.copy(
+                        spa = sys.spa?.optimisticCommand(
+                            on = false,
+                            accessories = sys.spa.accessories.mapValues { false },
+                            sharedPump = sys.system.pool_spa_shared_pump,
+                        )
+                    )
                 },
                 verify = { sys -> sys.spa?.on == false },
             )
             "spa" -> applyOptimistic(
                 description = "Spa on",
                 mutate = { sys ->
-                    sys.copy(spa = sys.spa?.copy(on = true, accessories = sys.spa.accessories.mapValues { false }))
+                    sys.copy(
+                        spa = sys.spa?.optimisticCommand(
+                            on = true,
+                            accessories = sys.spa.accessories.mapValues { false },
+                            sharedPump = sys.system.pool_spa_shared_pump,
+                        )
+                    )
                 },
                 verify = { sys -> sys.spa?.on == true && sys.spa.accessories["jets"] != true },
             )
             "jets" -> applyOptimistic(
                 description = "Jets on",
                 mutate = { sys ->
-                    sys.copy(spa = sys.spa?.copy(on = true, accessories = sys.spa.accessories + ("jets" to true)))
+                    sys.copy(
+                        spa = sys.spa?.optimisticCommand(
+                            on = true,
+                            accessories = sys.spa.accessories + ("jets" to true),
+                            sharedPump = sys.system.pool_spa_shared_pump,
+                        )
+                    )
                 },
                 verify = { sys -> sys.spa?.on == true && sys.spa.accessories["jets"] == true },
             )
@@ -404,12 +429,12 @@ class PoolRepository @Inject constructor(
         when (body) {
             "pool" -> applyOptimistic(
                 description = "Pool setpoint $temp",
-                mutate = { sys -> sys.copy(pool = sys.pool?.copy(setpoint = temp)) },
+                mutate = { sys -> sys.copy(pool = sys.pool?.optimisticSetpointChange(temp)) },
                 verify = { sys -> sys.pool?.setpoint == temp },
             )
             "spa" -> applyOptimistic(
                 description = "Spa setpoint $temp",
-                mutate = { sys -> sys.copy(spa = sys.spa?.copy(setpoint = temp)) },
+                mutate = { sys -> sys.copy(spa = sys.spa?.optimisticSetpointChange(temp)) },
                 verify = { sys -> sys.spa?.setpoint == temp },
             )
         }

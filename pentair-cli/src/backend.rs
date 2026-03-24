@@ -100,6 +100,15 @@ impl DaemonClient {
 }
 
 impl Backend {
+    pub fn client_id(&self) -> Result<i32, Box<dyn std::error::Error>> {
+        match self {
+            Backend::Direct(client) => Ok(client.client_id()),
+            Backend::Daemon(_) => {
+                Err("client id requires --direct mode (no daemon endpoint)".into())
+            }
+        }
+    }
+
     pub async fn get_version(&mut self) -> Result<VersionResponse, Box<dyn std::error::Error>> {
         match self {
             Backend::Direct(client) => Ok(client.get_version().await?),
@@ -111,6 +120,17 @@ impl Backend {
         match self {
             Backend::Direct(client) => Ok(client.get_status().await?),
             Backend::Daemon(d) => d.get_json("/api/status").await,
+        }
+    }
+
+    pub async fn get_system_time(
+        &mut self,
+    ) -> Result<SystemTimeResponse, Box<dyn std::error::Error>> {
+        match self {
+            Backend::Direct(client) => Ok(client.get_system_time().await?),
+            Backend::Daemon(_) => {
+                Err("system time command requires --direct mode (no daemon endpoint)".into())
+            }
         }
     }
 
@@ -257,6 +277,22 @@ impl Backend {
         }
     }
 
+    pub async fn get_history(
+        &mut self,
+        start_time: &pentair_protocol::types::SLDateTime,
+        end_time: &pentair_protocol::types::SLDateTime,
+        sender_id: i32,
+    ) -> Result<HistoryData, Box<dyn std::error::Error>> {
+        match self {
+            Backend::Direct(client) => {
+                Ok(client.get_history(start_time, end_time, sender_id).await?)
+            }
+            Backend::Daemon(_) => {
+                Err("history command requires --direct mode (no daemon endpoint)".into())
+            }
+        }
+    }
+
     pub async fn add_schedule_event(
         &mut self,
         schedule_type: i32,
@@ -291,20 +327,16 @@ impl Backend {
         heat: i32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match self {
-            Backend::Direct(client) => {
-                Ok(client
-                    .set_schedule_event(id, circuit_id, start, stop, day_mask, heat)
-                    .await?)
-            }
+            Backend::Direct(client) => Ok(client
+                .set_schedule_event(id, circuit_id, start, stop, day_mask, heat)
+                .await?),
             Backend::Daemon(_) => {
                 Err("schedule commands require --direct mode (no daemon endpoint)".into())
             }
         }
     }
 
-    pub async fn get_weather(
-        &mut self,
-    ) -> Result<WeatherResponse, Box<dyn std::error::Error>> {
+    pub async fn get_weather(&mut self) -> Result<WeatherResponse, Box<dyn std::error::Error>> {
         match self {
             Backend::Direct(client) => Ok(client.get_weather().await?),
             Backend::Daemon(_) => {

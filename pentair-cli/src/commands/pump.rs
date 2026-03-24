@@ -22,7 +22,11 @@ pub async fn run(
     println!("  Type:    {}", output::format_pump_type(pump.pump_type));
     println!(
         "  Status:  {}",
-        if pump.is_running { "Running" } else { "Stopped" }
+        if pump.is_running {
+            "Running"
+        } else {
+            "Stopped"
+        }
     );
     println!("  Watts:   {}", pump.watts);
     println!("  RPM:     {}", pump.rpm);

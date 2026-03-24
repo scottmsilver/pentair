@@ -67,6 +67,12 @@ enum Commands {
         #[command(subcommand)]
         action: ScheduleAction,
     },
+    /// Query controller history data
+    History {
+        /// Number of hours to look back from the controller's current time
+        #[arg(long, default_value = "24")]
+        hours: i64,
+    },
     /// Pump status
     Pump {
         /// Pump index (0-7)
@@ -257,9 +263,7 @@ async fn run_connected(
             ScheduleAction::Add { schedule_type } => {
                 commands::schedule::add(backend, schedule_type, json).await?
             }
-            ScheduleAction::Delete { id } => {
-                commands::schedule::delete(backend, *id, json).await?
-            }
+            ScheduleAction::Delete { id } => commands::schedule::delete(backend, *id, json).await?,
             ScheduleAction::Set {
                 id,
                 circuit,
@@ -272,6 +276,7 @@ async fn run_connected(
                     .await?
             }
         },
+        Commands::History { hours } => commands::history::run(backend, *hours, json).await?,
         Commands::Pump { index } => commands::pump::run(backend, *index, json).await?,
         Commands::Weather => commands::weather::run(backend, json).await?,
         Commands::CancelDelay => commands::cancel::run(backend, json).await?,

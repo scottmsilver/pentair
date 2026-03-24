@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tokio::sync::RwLock;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -25,7 +25,11 @@ impl DeviceManager {
         } else {
             DeviceStore::default()
         };
-        info!("loaded {} device token(s) from {:?}", store.tokens.len(), path);
+        info!(
+            "loaded {} device token(s) from {:?}",
+            store.tokens.len(),
+            path
+        );
         Self {
             store: Arc::new(RwLock::new(store)),
             path,
@@ -47,7 +51,10 @@ impl DeviceManager {
         store.tokens.retain(|t| t != token);
         if store.tokens.len() < before {
             self.persist(&store);
-            info!("removed invalid device token ({} remaining)", store.tokens.len());
+            info!(
+                "removed invalid device token ({} remaining)",
+                store.tokens.len()
+            );
         }
     }
 

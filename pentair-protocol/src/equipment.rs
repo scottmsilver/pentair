@@ -234,7 +234,11 @@ mod tests {
             ];
             let set_count = checks.iter().filter(|&&c| c).count();
             assert_eq!(set_count, 1, "bit {} should set exactly one flag", bit);
-            assert!(checks[bit as usize], "bit {} should set the correct flag", bit);
+            assert!(
+                checks[bit as usize],
+                "bit {} should set the correct flag",
+                bit
+            );
         }
     }
 }

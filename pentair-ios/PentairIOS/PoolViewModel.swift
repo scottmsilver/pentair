@@ -135,7 +135,12 @@ final class PoolViewModel: ObservableObject {
 
     func setPoolMode(_ mode: PoolBodyMode) {
         applyOptimistic { current in
-            current.updating(pool: current.pool?.updating(on: mode == .on))
+            current.updating(
+                pool: current.pool?.optimisticCommand(
+                    on: mode == .on,
+                    sharedPump: current.system.poolSpaSharedPump
+                )
+            )
         }
         recordDiagnostic("command", "Pool \(mode.rawValue)")
 
@@ -157,19 +162,22 @@ final class PoolViewModel: ObservableObject {
             let nextSpa: SpaState?
             switch mode {
             case .off:
-                nextSpa = current.spa?.updating(
+                nextSpa = current.spa?.optimisticCommand(
                     on: false,
-                    accessories: current.spa?.accessories.mapValues { _ in false } ?? [:]
+                    accessories: current.spa?.accessories.mapValues { _ in false } ?? [:],
+                    sharedPump: current.system.poolSpaSharedPump
                 )
             case .spa:
-                nextSpa = current.spa?.updating(
+                nextSpa = current.spa?.optimisticCommand(
                     on: true,
-                    accessories: current.spa?.accessories.mapValues { _ in false } ?? [:]
+                    accessories: current.spa?.accessories.mapValues { _ in false } ?? [:],
+                    sharedPump: current.system.poolSpaSharedPump
                 )
             case .jets:
-                nextSpa = current.spa?.updating(
+                nextSpa = current.spa?.optimisticCommand(
                     on: true,
-                    accessories: (current.spa?.accessories ?? [:]).merging(["jets": true]) { _, new in new }
+                    accessories: (current.spa?.accessories ?? [:]).merging(["jets": true]) { _, new in new },
+                    sharedPump: current.system.poolSpaSharedPump
                 )
             }
 
@@ -223,9 +231,9 @@ final class PoolViewModel: ObservableObject {
         applyOptimistic { current in
             switch body {
             case "spa":
-                return current.updating(spa: current.spa?.updating(setpoint: temperature))
+                return current.updating(spa: current.spa?.optimisticSetpointChange(temperature))
             default:
-                return current.updating(pool: current.pool?.updating(setpoint: temperature))
+                return current.updating(pool: current.pool?.optimisticSetpointChange(temperature))
             }
         }
 

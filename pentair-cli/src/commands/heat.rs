@@ -37,8 +37,8 @@ pub async fn set(
     temp: i32,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body_type =
-        output::parse_body(body).ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
+    let body_type = output::parse_body(body)
+        .ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
 
     backend.set_heat_setpoint(body_type, temp).await?;
 
@@ -60,8 +60,8 @@ pub async fn mode(
     mode: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body_type =
-        output::parse_body(body).ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
+    let body_type = output::parse_body(body)
+        .ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
     let heat_mode = output::parse_heat_mode(mode).ok_or_else(|| {
         format!(
             "Unknown heat mode: {} (use off, solar, solar-preferred, heat-pump)",
@@ -89,8 +89,8 @@ pub async fn cool(
     temp: i32,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let body_type =
-        output::parse_body(body).ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
+    let body_type = output::parse_body(body)
+        .ok_or_else(|| format!("Unknown body: {} (use pool or spa)", body))?;
 
     backend.set_cool_setpoint(body_type, temp).await?;
 

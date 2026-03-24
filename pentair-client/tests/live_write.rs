@@ -63,7 +63,10 @@ async fn poll_status(
         // Wait before reading so the adapter has time to process the command
         tokio::time::sleep(interval).await;
 
-        let status = client.get_status().await.expect("get_status failed during poll");
+        let status = client
+            .get_status()
+            .await
+            .expect("get_status failed during poll");
         if check(&status) {
             return status;
         }
@@ -133,7 +136,8 @@ async fn write_circuit_toggle() {
 
     eprintln!(
         "[write_circuit_toggle] '{}' (id={}): {} → {}",
-        circuit_name, logical_id,
+        circuit_name,
+        logical_id,
         if original_state { "ON" } else { "OFF" },
         if new_state { "ON" } else { "OFF" },
     );
@@ -143,21 +147,54 @@ async fn write_circuit_toggle() {
 
     // Poll until verified
     let status = poll_status(&mut client, POLL_TIMEOUT, "circuit toggle", |s| {
-        s.circuits.iter().find(|c| c.circuit_id == wire_id).map(|c| c.state) == Some(new_state)
-    }).await;
-    let read_back = status.circuits.iter().find(|c| c.circuit_id == wire_id).unwrap().state;
+        s.circuits
+            .iter()
+            .find(|c| c.circuit_id == wire_id)
+            .map(|c| c.state)
+            == Some(new_state)
+    })
+    .await;
+    let read_back = status
+        .circuits
+        .iter()
+        .find(|c| c.circuit_id == wire_id)
+        .unwrap()
+        .state;
     assert_eq!(read_back, new_state, "circuit write didn't take effect");
-    eprintln!("[write_circuit_toggle] verified: now {}", if new_state { "ON" } else { "OFF" });
+    eprintln!(
+        "[write_circuit_toggle] verified: now {}",
+        if new_state { "ON" } else { "OFF" }
+    );
 
     // Restore
-    client.set_circuit(logical_id, original_state).await.unwrap();
+    client
+        .set_circuit(logical_id, original_state)
+        .await
+        .unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "circuit restore", |s| {
-        s.circuits.iter().find(|c| c.circuit_id == wire_id).map(|c| c.state) == Some(original_state)
-    }).await;
-    let restored = status.circuits.iter().find(|c| c.circuit_id == wire_id).unwrap().state;
-    assert_restored!(original_state, restored, format!("Circuit '{}' (id={})", circuit_name, logical_id));
-    eprintln!("[write_circuit_toggle] restored: back to {}", if original_state { "ON" } else { "OFF" });
+        s.circuits
+            .iter()
+            .find(|c| c.circuit_id == wire_id)
+            .map(|c| c.state)
+            == Some(original_state)
+    })
+    .await;
+    let restored = status
+        .circuits
+        .iter()
+        .find(|c| c.circuit_id == wire_id)
+        .unwrap()
+        .state;
+    assert_restored!(
+        original_state,
+        restored,
+        format!("Circuit '{}' (id={})", circuit_name, logical_id)
+    );
+    eprintln!(
+        "[write_circuit_toggle] restored: back to {}",
+        if original_state { "ON" } else { "OFF" }
+    );
 
     client.disconnect().await.unwrap();
 }
@@ -170,29 +207,65 @@ async fn write_heat_setpoint_pool() {
     let mut client = connect().await;
 
     let status = client.get_status().await.unwrap();
-    let original = status.bodies.iter().find(|b| b.body_type == 0).expect("no pool body").set_point;
-    let test_val = if original >= 104 { original - 1 } else { original + 1 };
+    let original = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .expect("no pool body")
+        .set_point;
+    let test_val = if original >= 104 {
+        original - 1
+    } else {
+        original + 1
+    };
 
-    eprintln!("[write_heat_setpoint_pool] set point: {} → {}", original, test_val);
+    eprintln!(
+        "[write_heat_setpoint_pool] set point: {} → {}",
+        original, test_val
+    );
 
     // Write
     client.set_heat_setpoint(0, test_val).await.unwrap();
 
     // Poll
     let status = poll_status(&mut client, POLL_TIMEOUT, "pool setpoint write", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.set_point) == Some(test_val)
-    }).await;
-    let new_sp = status.bodies.iter().find(|b| b.body_type == 0).unwrap().set_point;
-    assert_eq!(new_sp, test_val, "pool set point write didn't take: expected {}, got {}", test_val, new_sp);
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 0)
+            .map(|b| b.set_point)
+            == Some(test_val)
+    })
+    .await;
+    let new_sp = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .set_point;
+    assert_eq!(
+        new_sp, test_val,
+        "pool set point write didn't take: expected {}, got {}",
+        test_val, new_sp
+    );
     eprintln!("[write_heat_setpoint_pool] verified: now {}", new_sp);
 
     // Restore
     client.set_heat_setpoint(0, original).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "pool setpoint restore", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.set_point) == Some(original)
-    }).await;
-    let restored = status.bodies.iter().find(|b| b.body_type == 0).unwrap().set_point;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 0)
+            .map(|b| b.set_point)
+            == Some(original)
+    })
+    .await;
+    let restored = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .set_point;
     assert_restored!(original, restored, "Pool heat set point");
     eprintln!("[write_heat_setpoint_pool] restored: back to {}", restored);
 
@@ -207,19 +280,41 @@ async fn write_heat_setpoint_spa() {
     let mut client = connect().await;
 
     let status = client.get_status().await.unwrap();
-    let original = status.bodies.iter().find(|b| b.body_type == 1).expect("no spa body").set_point;
-    let test_val = if original >= 104 { original - 1 } else { original + 1 };
+    let original = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .expect("no spa body")
+        .set_point;
+    let test_val = if original >= 104 {
+        original - 1
+    } else {
+        original + 1
+    };
 
-    eprintln!("[write_heat_setpoint_spa] set point: {} → {}", original, test_val);
+    eprintln!(
+        "[write_heat_setpoint_spa] set point: {} → {}",
+        original, test_val
+    );
 
     // Write
     client.set_heat_setpoint(1, test_val).await.unwrap();
 
     // Poll
     let status = poll_status(&mut client, POLL_TIMEOUT, "spa setpoint write", |s| {
-        s.bodies.iter().find(|b| b.body_type == 1).map(|b| b.set_point) == Some(test_val)
-    }).await;
-    let new_sp = status.bodies.iter().find(|b| b.body_type == 1).unwrap().set_point;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 1)
+            .map(|b| b.set_point)
+            == Some(test_val)
+    })
+    .await;
+    let new_sp = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .unwrap()
+        .set_point;
     assert_eq!(new_sp, test_val, "spa set point write didn't take");
     eprintln!("[write_heat_setpoint_spa] verified: now {}", new_sp);
 
@@ -227,9 +322,19 @@ async fn write_heat_setpoint_spa() {
     client.set_heat_setpoint(1, original).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "spa setpoint restore", |s| {
-        s.bodies.iter().find(|b| b.body_type == 1).map(|b| b.set_point) == Some(original)
-    }).await;
-    let restored = status.bodies.iter().find(|b| b.body_type == 1).unwrap().set_point;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 1)
+            .map(|b| b.set_point)
+            == Some(original)
+    })
+    .await;
+    let restored = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .unwrap()
+        .set_point;
     assert_restored!(original, restored, "Spa heat set point");
     eprintln!("[write_heat_setpoint_spa] restored: back to {}", restored);
 
@@ -244,31 +349,66 @@ async fn write_heat_mode_pool() {
     let mut client = connect().await;
 
     let status = client.get_status().await.unwrap();
-    let original = status.bodies.iter().find(|b| b.body_type == 0).expect("no pool body").heat_mode;
+    let original = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .expect("no pool body")
+        .heat_mode;
     let test_val = if original == 0 { 3 } else { 0 };
 
-    eprintln!("[write_heat_mode_pool] heat mode: {} → {}", fmt_mode(original), fmt_mode(test_val));
+    eprintln!(
+        "[write_heat_mode_pool] heat mode: {} → {}",
+        fmt_mode(original),
+        fmt_mode(test_val)
+    );
 
     // Write
     client.set_heat_mode(0, test_val).await.unwrap();
 
     // Poll
     let status = poll_status(&mut client, POLL_TIMEOUT, "pool heat mode write", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.heat_mode) == Some(test_val)
-    }).await;
-    let new_mode = status.bodies.iter().find(|b| b.body_type == 0).unwrap().heat_mode;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 0)
+            .map(|b| b.heat_mode)
+            == Some(test_val)
+    })
+    .await;
+    let new_mode = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .heat_mode;
     assert_eq!(new_mode, test_val, "pool heat mode write didn't take");
-    eprintln!("[write_heat_mode_pool] verified: now {}", fmt_mode(new_mode));
+    eprintln!(
+        "[write_heat_mode_pool] verified: now {}",
+        fmt_mode(new_mode)
+    );
 
     // Restore
     client.set_heat_mode(0, original).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "pool heat mode restore", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.heat_mode) == Some(original)
-    }).await;
-    let restored = status.bodies.iter().find(|b| b.body_type == 0).unwrap().heat_mode;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 0)
+            .map(|b| b.heat_mode)
+            == Some(original)
+    })
+    .await;
+    let restored = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .heat_mode;
     assert_restored!(original, restored, "Pool heat mode");
-    eprintln!("[write_heat_mode_pool] restored: back to {}", fmt_mode(restored));
+    eprintln!(
+        "[write_heat_mode_pool] restored: back to {}",
+        fmt_mode(restored)
+    );
 
     client.disconnect().await.unwrap();
 }
@@ -281,28 +421,60 @@ async fn write_heat_mode_spa() {
     let mut client = connect().await;
 
     let status = client.get_status().await.unwrap();
-    let original = status.bodies.iter().find(|b| b.body_type == 1).expect("no spa body").heat_mode;
+    let original = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .expect("no spa body")
+        .heat_mode;
     let test_val = if original == 0 { 3 } else { 0 };
 
-    eprintln!("[write_heat_mode_spa] heat mode: {} → {}", fmt_mode(original), fmt_mode(test_val));
+    eprintln!(
+        "[write_heat_mode_spa] heat mode: {} → {}",
+        fmt_mode(original),
+        fmt_mode(test_val)
+    );
 
     client.set_heat_mode(1, test_val).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "spa heat mode write", |s| {
-        s.bodies.iter().find(|b| b.body_type == 1).map(|b| b.heat_mode) == Some(test_val)
-    }).await;
-    let new_mode = status.bodies.iter().find(|b| b.body_type == 1).unwrap().heat_mode;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 1)
+            .map(|b| b.heat_mode)
+            == Some(test_val)
+    })
+    .await;
+    let new_mode = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .unwrap()
+        .heat_mode;
     assert_eq!(new_mode, test_val, "spa heat mode write didn't take");
     eprintln!("[write_heat_mode_spa] verified: now {}", fmt_mode(new_mode));
 
     client.set_heat_mode(1, original).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "spa heat mode restore", |s| {
-        s.bodies.iter().find(|b| b.body_type == 1).map(|b| b.heat_mode) == Some(original)
-    }).await;
-    let restored = status.bodies.iter().find(|b| b.body_type == 1).unwrap().heat_mode;
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 1)
+            .map(|b| b.heat_mode)
+            == Some(original)
+    })
+    .await;
+    let restored = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 1)
+        .unwrap()
+        .heat_mode;
     assert_restored!(original, restored, "Spa heat mode");
-    eprintln!("[write_heat_mode_spa] restored: back to {}", fmt_mode(restored));
+    eprintln!(
+        "[write_heat_mode_spa] restored: back to {}",
+        fmt_mode(restored)
+    );
 
     client.disconnect().await.unwrap();
 }
@@ -315,26 +487,67 @@ async fn write_cool_setpoint_pool() {
     let mut client = connect().await;
 
     let status = client.get_status().await.unwrap();
-    let original = status.bodies.iter().find(|b| b.body_type == 0).expect("no pool body").cool_set_point;
-    let test_val = if original >= 104 { original - 1 } else { original + 1 };
+    let original = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .expect("no pool body")
+        .cool_set_point;
+    let test_val = if original >= 104 {
+        original - 1
+    } else {
+        original + 1
+    };
 
-    eprintln!("[write_cool_setpoint_pool] cool set point: {} → {}", original, test_val);
+    eprintln!(
+        "[write_cool_setpoint_pool] cool set point: {} → {}",
+        original, test_val
+    );
 
     client.set_cool_setpoint(0, test_val).await.unwrap();
 
     let status = poll_status(&mut client, POLL_TIMEOUT, "pool cool setpoint write", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.cool_set_point) == Some(test_val)
-    }).await;
-    let new_sp = status.bodies.iter().find(|b| b.body_type == 0).unwrap().cool_set_point;
-    assert_eq!(new_sp, test_val, "pool cool setpoint write didn't take: expected {}, got {}", test_val, new_sp);
+        s.bodies
+            .iter()
+            .find(|b| b.body_type == 0)
+            .map(|b| b.cool_set_point)
+            == Some(test_val)
+    })
+    .await;
+    let new_sp = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .cool_set_point;
+    assert_eq!(
+        new_sp, test_val,
+        "pool cool setpoint write didn't take: expected {}, got {}",
+        test_val, new_sp
+    );
     eprintln!("[write_cool_setpoint_pool] verified: now {}", new_sp);
 
     client.set_cool_setpoint(0, original).await.unwrap();
 
-    let status = poll_status(&mut client, POLL_TIMEOUT, "pool cool setpoint restore", |s| {
-        s.bodies.iter().find(|b| b.body_type == 0).map(|b| b.cool_set_point) == Some(original)
-    }).await;
-    let restored = status.bodies.iter().find(|b| b.body_type == 0).unwrap().cool_set_point;
+    let status = poll_status(
+        &mut client,
+        POLL_TIMEOUT,
+        "pool cool setpoint restore",
+        |s| {
+            s.bodies
+                .iter()
+                .find(|b| b.body_type == 0)
+                .map(|b| b.cool_set_point)
+                == Some(original)
+        },
+    )
+    .await;
+    let restored = status
+        .bodies
+        .iter()
+        .find(|b| b.body_type == 0)
+        .unwrap()
+        .cool_set_point;
     assert_restored!(original, restored, "Pool cool set point");
     eprintln!("[write_cool_setpoint_pool] restored: back to {}", restored);
 
@@ -352,12 +565,22 @@ async fn write_cool_setpoint_spa_rejected() {
     // Our client detects this and returns WriteRejected.
     eprintln!("[write_cool_setpoint_spa_rejected] sending cool setpoint (expect WriteRejected)");
     let result = client.set_cool_setpoint(1, 60).await;
-    assert!(result.is_err(), "spa cool setpoint should fail on IntelliTouch");
+    assert!(
+        result.is_err(),
+        "spa cool setpoint should fail on IntelliTouch"
+    );
 
     let err = result.unwrap_err();
     let msg = format!("{}", err);
-    assert!(msg.contains("not supported"), "error should mention 'not supported': {}", msg);
-    eprintln!("[write_cool_setpoint_spa_rejected] correctly rejected: {}", msg);
+    assert!(
+        msg.contains("not supported"),
+        "error should mention 'not supported': {}",
+        msg
+    );
+    eprintln!(
+        "[write_cool_setpoint_spa_rejected] correctly rejected: {}",
+        msg
+    );
 
     // Adapter should still be responsive
     let status = client.get_status().await.unwrap();
@@ -397,13 +620,21 @@ async fn read_system_time() {
     let time = client.get_system_time().await.unwrap();
     eprintln!(
         "[read_system_time] {}-{:02}-{:02} {:02}:{:02}:{:02} (DST={})",
-        time.time.year, time.time.month, time.time.day,
-        time.time.hour, time.time.minute, time.time.second,
+        time.time.year,
+        time.time.month,
+        time.time.day,
+        time.time.hour,
+        time.time.minute,
+        time.time.second,
         time.adjust_for_dst
     );
 
     // Sanity check: year should be reasonable
-    assert!(time.time.year >= 2024 && time.time.year <= 2030, "year {} seems wrong", time.time.year);
+    assert!(
+        time.time.year >= 2024 && time.time.year <= 2030,
+        "year {} seems wrong",
+        time.time.year
+    );
     assert!(time.time.month >= 1 && time.time.month <= 12);
     assert!(time.time.day >= 1 && time.time.day <= 31);
 
@@ -419,32 +650,62 @@ async fn write_circuit_by_name() {
 
     // Get config and find Yard Light's logical ID by name
     let config = client.get_controller_config().await.unwrap();
-    let target = config.circuits.iter()
+    let target = config
+        .circuits
+        .iter()
         .find(|c| c.name == "Yard Light")
         .expect("no Yard Light circuit");
     let logical_id = target.circuit_id - 499;
     let wire_id = target.circuit_id;
 
     let status = client.get_status().await.unwrap();
-    let original = status.circuits.iter().find(|c| c.circuit_id == wire_id).unwrap().state;
+    let original = status
+        .circuits
+        .iter()
+        .find(|c| c.circuit_id == wire_id)
+        .unwrap()
+        .state;
 
-    eprintln!("[write_circuit_by_name] 'Yard Light' resolved to id={}, toggling", logical_id);
+    eprintln!(
+        "[write_circuit_by_name] 'Yard Light' resolved to id={}, toggling",
+        logical_id
+    );
 
     // Toggle
     client.set_circuit(logical_id, !original).await.unwrap();
     let status = poll_status(&mut client, POLL_TIMEOUT, "circuit by name toggle", |s| {
-        s.circuits.iter().find(|c| c.circuit_id == wire_id).map(|c| c.state) == Some(!original)
-    }).await;
-    let toggled = status.circuits.iter().find(|c| c.circuit_id == wire_id).unwrap().state;
+        s.circuits
+            .iter()
+            .find(|c| c.circuit_id == wire_id)
+            .map(|c| c.state)
+            == Some(!original)
+    })
+    .await;
+    let toggled = status
+        .circuits
+        .iter()
+        .find(|c| c.circuit_id == wire_id)
+        .unwrap()
+        .state;
     assert_eq!(toggled, !original);
     eprintln!("[write_circuit_by_name] verified toggle");
 
     // Restore
     client.set_circuit(logical_id, original).await.unwrap();
     let status = poll_status(&mut client, POLL_TIMEOUT, "circuit by name restore", |s| {
-        s.circuits.iter().find(|c| c.circuit_id == wire_id).map(|c| c.state) == Some(original)
-    }).await;
-    let restored = status.circuits.iter().find(|c| c.circuit_id == wire_id).unwrap().state;
+        s.circuits
+            .iter()
+            .find(|c| c.circuit_id == wire_id)
+            .map(|c| c.state)
+            == Some(original)
+    })
+    .await;
+    let restored = status
+        .circuits
+        .iter()
+        .find(|c| c.circuit_id == wire_id)
+        .unwrap()
+        .state;
     assert_restored!(original, restored, "Yard Light circuit (by name)");
     eprintln!("[write_circuit_by_name] restored");
 
@@ -482,7 +743,10 @@ async fn write_cancel_delay() {
     client.cancel_delay().await.unwrap();
 
     let status = client.get_status().await.unwrap();
-    assert!(!status.bodies.is_empty(), "status should still be readable after cancel delay");
+    assert!(
+        !status.bodies.is_empty(),
+        "status should still be readable after cancel delay"
+    );
     eprintln!("[write_cancel_delay] done — adapter still responsive");
 
     client.disconnect().await.unwrap();

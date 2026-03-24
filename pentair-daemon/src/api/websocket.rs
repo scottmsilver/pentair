@@ -1,15 +1,12 @@
+use crate::api::routes::AppState;
 use axum::{
+    extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
     extract::State,
-    extract::ws::{WebSocket, WebSocketUpgrade, Message, Utf8Bytes},
     response::IntoResponse,
 };
-use crate::api::routes::AppState;
 use tracing::debug;
 
-pub async fn ws_handler(
-    State(state): State<AppState>,
-    ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+pub async fn ws_handler(State(state): State<AppState>, ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

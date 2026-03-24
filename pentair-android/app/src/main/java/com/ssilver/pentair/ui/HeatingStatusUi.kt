@@ -23,6 +23,8 @@ fun poolHeatingStatus(
     on = pool.on,
     active = pool.active,
     temperature = pool.temperature,
+    temperatureReliable = pool.temperature_reliable,
+    temperatureReason = pool.temperature_reason,
     setpoint = pool.setpoint,
     heatMode = pool.heat_mode,
     heating = pool.heating,
@@ -38,6 +40,8 @@ fun spaHeatingStatus(
     on = spa.on,
     active = spa.active,
     temperature = spa.temperature,
+    temperatureReliable = spa.temperature_reliable,
+    temperatureReason = spa.temperature_reason,
     setpoint = spa.setpoint,
     heatMode = spa.heat_mode,
     heating = spa.heating,
@@ -61,6 +65,8 @@ private fun resolveHeatingStatus(
     on: Boolean,
     active: Boolean,
     temperature: Int,
+    temperatureReliable: Boolean,
+    temperatureReason: String?,
     setpoint: Int,
     heatMode: String,
     heating: String,
@@ -77,6 +83,10 @@ private fun resolveHeatingStatus(
     if (on) {
         if (normalizedHeatMode == "off") {
             return HeatingStatusUi(label = "Heat off", tone = HeatingStatusTone.NEUTRAL)
+        }
+
+        if (!temperatureReliable && temperatureReason == "sensor-warmup") {
+            return HeatingStatusUi(label = "Heating", tone = HeatingStatusTone.HEATING)
         }
 
         if (temperature >= setpoint) {

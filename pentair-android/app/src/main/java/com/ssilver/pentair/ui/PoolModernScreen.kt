@@ -50,9 +50,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -60,9 +60,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalDensity
 import com.ssilver.pentair.data.BodyState
+import com.ssilver.pentair.data.BodyTemperaturePresentation
 import com.ssilver.pentair.data.ConnectionState
 import com.ssilver.pentair.data.LightState
 import com.ssilver.pentair.data.SpaState
+import com.ssilver.pentair.data.temperaturePresentation
 import com.ssilver.pentair.ui.theme.Warm
 
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
@@ -150,7 +152,7 @@ fun PoolModernScreen(
                         item {
                             BodyControlCard(
                                 title = "Pool",
-                                temperature = pool.temperature,
+                                presentation = pool.temperaturePresentation(),
                                 setpoint = pool.setpoint,
                                 status = poolHeatingStatus(pool, spa, sharedPump),
                                 onSetpointClick = onPoolSetpointClick,
@@ -162,7 +164,7 @@ fun PoolModernScreen(
                         item {
                             BodyControlCard(
                                 title = "Spa",
-                                temperature = spa.temperature,
+                                presentation = spa.temperaturePresentation(),
                                 setpoint = spa.setpoint,
                                 status = spaHeatingStatus(spa, pool, sharedPump),
                                 onSetpointClick = onSpaSetpointClick,
@@ -205,7 +207,7 @@ private fun ConnectionStatusBadge(connectionState: ConnectionState) {
 @Composable
 private fun BodyControlCard(
     title: String,
-    temperature: Int,
+    presentation: BodyTemperaturePresentation,
     setpoint: Int,
     status: HeatingStatusUi?,
     onSetpointClick: () -> Unit,
@@ -244,11 +246,22 @@ private fun BodyControlCard(
                 }
             }
 
-            Text(
-                text = "$temperature\u00B0",
-                style = MaterialTheme.typography.displaySmall.copy(fontSize = 44.sp),
-                fontWeight = FontWeight.SemiBold,
-            )
+            Column(
+                verticalArrangement = Arrangement.spacedBy(0.dp),
+            ) {
+                TemperatureLine(
+                    presentation = presentation,
+                )
+
+                presentation.detailText?.let { detail ->
+                    Text(
+                        text = detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+            }
 
             controls()
 
@@ -267,6 +280,41 @@ private fun heatingStatusColor(status: HeatingStatusUi): Color = when (status.to
     HeatingStatusTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
     HeatingStatusTone.WARNING -> Color(0xFFF59E0B)
     HeatingStatusTone.ERROR -> MaterialTheme.colorScheme.error
+}
+
+@Composable
+private fun TemperatureLine(
+    presentation: BodyTemperaturePresentation,
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        Text(
+            text = presentation.temperatureText,
+            style = MaterialTheme.typography.displayMedium.copy(
+                fontSize = 46.sp,
+                fontWeight = FontWeight.SemiBold,
+            ),
+            color = if (presentation.isStale) {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            },
+            modifier = Modifier.alignByBaseline(),
+        )
+
+        presentation.staleText?.let { staleText ->
+            Text(
+                text = staleText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .alignByBaseline()
+                    .padding(bottom = 6.dp),
+            )
+        }
+    }
 }
 
 @Composable

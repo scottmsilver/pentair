@@ -78,9 +78,10 @@ impl Client {
         const MAX_PAYLOAD: u32 = 64 * 1024;
         if header.data_length > MAX_PAYLOAD {
             return Err(ClientError::Protocol(
-                pentair_protocol::error::ProtocolError::InvalidData(
-                    format!("payload too large: {} bytes (max {})", header.data_length, MAX_PAYLOAD)
-                )
+                pentair_protocol::error::ProtocolError::InvalidData(format!(
+                    "payload too large: {} bytes (max {})",
+                    header.data_length, MAX_PAYLOAD
+                )),
             ));
         }
         let mut payload = vec![0u8; header.data_length as usize];
@@ -123,7 +124,9 @@ impl Client {
     }
 
     pub async fn set_circuit(&mut self, circuit_id: i32, state: bool) -> Result<()> {
-        let _ = self.send_and_recv(build_button_press(circuit_id, state)).await?;
+        let _ = self
+            .send_and_recv(build_button_press(circuit_id, state))
+            .await?;
         Ok(())
     }
 
@@ -186,7 +189,9 @@ impl Client {
     }
 
     pub async fn get_pump_status(&mut self, pump_index: i32) -> Result<PumpStatus> {
-        let (_, payload) = self.send_and_recv(build_get_pump_status(pump_index)).await?;
+        let (_, payload) = self
+            .send_and_recv(build_get_pump_status(pump_index))
+            .await?;
         Ok(parse_pump_status(&payload)?)
     }
 
@@ -195,6 +200,46 @@ impl Client {
             .send_and_recv(build_get_schedule_data(schedule_type))
             .await?;
         Ok(parse_schedule_data(&payload)?)
+    }
+
+    pub async fn get_history(
+        &mut self,
+        start_time: &pentair_protocol::types::SLDateTime,
+        end_time: &pentair_protocol::types::SLDateTime,
+        sender_id: i32,
+    ) -> Result<HistoryData> {
+        self.send_raw(build_get_history(start_time, end_time, sender_id))
+            .await?;
+
+        loop {
+            let (header, payload) = self.recv_message().await?;
+            match Action::try_from(header.action) {
+                Ok(Action::HistoryResponse) => {
+                    debug!("history request acknowledged");
+                }
+                Ok(Action::HistoryDataPush) => {
+                    return Ok(parse_history_data(&payload)?);
+                }
+                Ok(action) if is_push_message(action as u16) => {
+                    debug!(
+                        "skipping push while waiting for history: action={}",
+                        header.action
+                    );
+                }
+                Ok(action) => {
+                    debug!(
+                        "ignoring unrelated message while waiting for history: action={:?}",
+                        action
+                    );
+                }
+                Err(_) => {
+                    debug!(
+                        "ignoring unknown action while waiting for history: action={}",
+                        header.action
+                    );
+                }
+            }
+        }
     }
 
     pub async fn add_schedule_event(&mut self, schedule_type: i32) -> Result<()> {
@@ -311,11 +356,7 @@ mod tests {
     fn rand_client_id_in_range() {
         for _ in 0..100 {
             let id = rand_client_id();
-            assert!(
-                id >= 32767 && id <= 65535,
-                "client_id {} out of range",
-                id
-            );
+            assert!(id >= 32767 && id <= 65535, "client_id {} out of range", id);
         }
     }
 }

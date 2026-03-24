@@ -1,15 +1,15 @@
+use crate::adapter::{AdapterCommand, PushEvent};
+use crate::state::SharedState;
 use axum::{
-    extract::State,
     extract::Path,
+    extract::State,
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
-use crate::adapter::{AdapterCommand, PushEvent};
-use crate::state::SharedState;
-use tokio::sync::{broadcast, mpsc};
 use serde::Deserialize;
+use tokio::sync::{broadcast, mpsc};
 
 const INDEX_HTML: &str = include_str!("../../static/index.html");
 
@@ -27,7 +27,12 @@ pub fn router(
     push_tx: broadcast::Sender<PushEvent>,
     devices: crate::devices::DeviceManager,
 ) -> Router {
-    let state = AppState { shared, cmd_tx, push_tx, devices };
+    let state = AppState {
+        shared,
+        cmd_tx,
+        push_tx,
+        devices,
+    };
 
     Router::new()
         // ── Web UI ─────────────────────────────────────────────────
@@ -70,7 +75,11 @@ pub fn router(
 // ── Web UI ──────────────────────────────────────────────────────────────
 
 async fn serve_ui() -> impl IntoResponse {
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], INDEX_HTML)
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        INDEX_HTML,
+    )
 }
 
 // GET endpoints - serve from cache
@@ -108,7 +117,10 @@ async fn get_chlor(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(serde_json::to_value(&s.scg).unwrap_or(serde_json::Value::Null))
 }
 
-async fn get_pump(State(state): State<AppState>, Path(index): Path<usize>) -> Json<serde_json::Value> {
+async fn get_pump(
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
+) -> Json<serde_json::Value> {
     let s = state.shared.read().await;
     let pump = s.pumps.get(index).and_then(|p| p.as_ref());
     Json(serde_json::to_value(&pump).unwrap_or(serde_json::Value::Null))
@@ -127,11 +139,14 @@ async fn set_circuit(
     Json(body): Json<CircuitRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetCircuit {
-        circuit_id: id,
-        state: body.state,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetCircuit {
+            circuit_id: id,
+            state: body.state,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -150,11 +165,14 @@ async fn set_heat_setpoint(
     Json(body): Json<HeatSetpointRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetHeatSetpoint {
-        body_type: body.body_type,
-        temp: body.temperature,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetHeatSetpoint {
+            body_type: body.body_type,
+            temp: body.temperature,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -173,11 +191,14 @@ async fn set_heat_mode(
     Json(body): Json<HeatModeRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetHeatMode {
-        body_type: body.body_type,
-        mode: body.mode,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetHeatMode {
+            body_type: body.body_type,
+            mode: body.mode,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -196,11 +217,14 @@ async fn set_cool_setpoint(
     Json(body): Json<CoolSetpointRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetCoolSetpoint {
-        body_type: body.body_type,
-        temp: body.temperature,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetCoolSetpoint {
+            body_type: body.body_type,
+            temp: body.temperature,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -218,10 +242,13 @@ async fn set_light(
     Json(body): Json<LightRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetLightCommand {
-        command: body.command,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetLightCommand {
+            command: body.command,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -240,11 +267,14 @@ async fn set_chlor(
     Json(body): Json<ChlorRequest>,
 ) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetScgConfig {
-        pool: body.pool,
-        spa: body.spa,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetScgConfig {
+            pool: body.pool,
+            spa: body.spa,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -254,7 +284,10 @@ async fn set_chlor(
 
 async fn cancel_delay(State(state): State<AppState>) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::CancelDelay { reply: tx }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::CancelDelay { reply: tx })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -264,7 +297,10 @@ async fn cancel_delay(State(state): State<AppState>) -> Json<serde_json::Value> 
 
 async fn refresh(State(state): State<AppState>) -> Json<serde_json::Value> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::RefreshAll { reply: tx }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::RefreshAll { reply: tx })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -299,11 +335,14 @@ async fn set_semantic_circuit(state: &AppState, id: &str, on: bool) -> Json<serd
         return Json(serde_json::json!({"ok": false, "error": format!("unknown device: {}", id)}));
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetCircuit {
-        circuit_id,
-        state: on,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetCircuit {
+            circuit_id,
+            state: on,
+            reply: tx,
+        })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),
@@ -318,11 +357,24 @@ struct OnRequest {
     setpoint: Option<i32>,
 }
 
-async fn pool_on(State(state): State<AppState>, body: Option<Json<OnRequest>>) -> Json<serde_json::Value> {
+async fn pool_on(
+    State(state): State<AppState>,
+    body: Option<Json<OnRequest>>,
+) -> Json<serde_json::Value> {
     if let Some(Json(req)) = &body {
         if let Some(sp) = req.setpoint {
-            let r = apply_heat(&state, "pool", HeatRequest { setpoint: Some(sp), mode: None }).await;
-            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) { return r; }
+            let r = apply_heat(
+                &state,
+                "pool",
+                HeatRequest {
+                    setpoint: Some(sp),
+                    mode: None,
+                },
+            )
+            .await;
+            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                return r;
+            }
         }
     }
     set_semantic_circuit(&state, "pool", true).await
@@ -332,11 +384,24 @@ async fn pool_off(State(state): State<AppState>) -> Json<serde_json::Value> {
     set_semantic_circuit(&state, "pool", false).await
 }
 
-async fn spa_on(State(state): State<AppState>, body: Option<Json<OnRequest>>) -> Json<serde_json::Value> {
+async fn spa_on(
+    State(state): State<AppState>,
+    body: Option<Json<OnRequest>>,
+) -> Json<serde_json::Value> {
     if let Some(Json(req)) = &body {
         if let Some(sp) = req.setpoint {
-            let r = apply_heat(&state, "spa", HeatRequest { setpoint: Some(sp), mode: None }).await;
-            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) { return r; }
+            let r = apply_heat(
+                &state,
+                "spa",
+                HeatRequest {
+                    setpoint: Some(sp),
+                    mode: None,
+                },
+            )
+            .await;
+            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+                return r;
+            }
         }
     }
     set_semantic_circuit(&state, "spa", true).await
@@ -353,7 +418,9 @@ async fn jets_on(State(state): State<AppState>) -> Json<serde_json::Value> {
     // (Without spa, the valve routes water elsewhere and jets are pointless.)
     let spa_on = {
         let s = state.shared.read().await;
-        s.pool_system().and_then(|p| p.spa.map(|s| s.on)).unwrap_or(false)
+        s.pool_system()
+            .and_then(|p| p.spa.map(|s| s.on))
+            .unwrap_or(false)
     };
     if !spa_on {
         let result = set_semantic_circuit(&state, "spa", true).await;
@@ -389,7 +456,11 @@ struct HeatRequest {
     mode: Option<String>,
 }
 
-async fn apply_heat(state: &AppState, body_name: &str, body: HeatRequest) -> Json<serde_json::Value> {
+async fn apply_heat(
+    state: &AppState,
+    body_name: &str,
+    body: HeatRequest,
+) -> Json<serde_json::Value> {
     let body_type = match body_name {
         "pool" => 0,
         "spa" => 1,
@@ -398,11 +469,14 @@ async fn apply_heat(state: &AppState, body_name: &str, body: HeatRequest) -> Jso
 
     if let Some(setpoint) = body.setpoint {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = state.cmd_tx.send(AdapterCommand::SetHeatSetpoint {
-            body_type,
-            temp: setpoint,
-            reply: tx,
-        }).await;
+        let _ = state
+            .cmd_tx
+            .send(AdapterCommand::SetHeatSetpoint {
+                body_type,
+                temp: setpoint,
+                reply: tx,
+            })
+            .await;
         if let Ok(Err(e)) = rx.await {
             return Json(serde_json::json!({"ok": false, "error": e}));
         }
@@ -414,14 +488,21 @@ async fn apply_heat(state: &AppState, body_name: &str, body: HeatRequest) -> Jso
             "solar" => 1,
             "solar-preferred" => 2,
             "heat-pump" | "heater" => 3,
-            _ => return Json(serde_json::json!({"ok": false, "error": format!("unknown heat mode: {}", mode_str)})),
+            _ => {
+                return Json(
+                    serde_json::json!({"ok": false, "error": format!("unknown heat mode: {}", mode_str)}),
+                )
+            }
         };
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let _ = state.cmd_tx.send(AdapterCommand::SetHeatMode {
-            body_type,
-            mode,
-            reply: tx,
-        }).await;
+        let _ = state
+            .cmd_tx
+            .send(AdapterCommand::SetHeatMode {
+                body_type,
+                mode,
+                reply: tx,
+            })
+            .await;
         if let Ok(Err(e)) = rx.await {
             return Json(serde_json::json!({"ok": false, "error": e}));
         }
@@ -430,11 +511,17 @@ async fn apply_heat(state: &AppState, body_name: &str, body: HeatRequest) -> Jso
     Json(serde_json::json!({"ok": true}))
 }
 
-async fn pool_heat(State(state): State<AppState>, Json(body): Json<HeatRequest>) -> Json<serde_json::Value> {
+async fn pool_heat(
+    State(state): State<AppState>,
+    Json(body): Json<HeatRequest>,
+) -> Json<serde_json::Value> {
     apply_heat(&state, "pool", body).await
 }
 
-async fn spa_heat(State(state): State<AppState>, Json(body): Json<HeatRequest>) -> Json<serde_json::Value> {
+async fn spa_heat(
+    State(state): State<AppState>,
+    Json(body): Json<HeatRequest>,
+) -> Json<serde_json::Value> {
     apply_heat(&state, "spa", body).await
 }
 
@@ -443,19 +530,38 @@ struct LightModeRequest {
     mode: String,
 }
 
-async fn lights_mode(State(state): State<AppState>, Json(body): Json<LightModeRequest>) -> Json<serde_json::Value> {
+async fn lights_mode(
+    State(state): State<AppState>,
+    Json(body): Json<LightModeRequest>,
+) -> Json<serde_json::Value> {
     let command = match body.mode.as_str() {
-        "off" => 0, "on" => 1, "set" => 2, "sync" => 3, "swim" => 4,
-        "party" => 5, "romantic" => 6, "caribbean" => 7, "american" => 8,
-        "sunset" => 9, "royal" => 10, "blue" => 13, "green" => 14,
-        "red" => 15, "white" => 16, "purple" => 17,
-        _ => return Json(serde_json::json!({"ok": false, "error": format!("unknown light mode: {}", body.mode)})),
+        "off" => 0,
+        "on" => 1,
+        "set" => 2,
+        "sync" => 3,
+        "swim" => 4,
+        "party" => 5,
+        "romantic" => 6,
+        "caribbean" => 7,
+        "american" => 8,
+        "sunset" => 9,
+        "royal" => 10,
+        "blue" => 13,
+        "green" => 14,
+        "red" => 15,
+        "white" => 16,
+        "purple" => 17,
+        _ => {
+            return Json(
+                serde_json::json!({"ok": false, "error": format!("unknown light mode: {}", body.mode)}),
+            )
+        }
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let _ = state.cmd_tx.send(AdapterCommand::SetLightCommand {
-        command,
-        reply: tx,
-    }).await;
+    let _ = state
+        .cmd_tx
+        .send(AdapterCommand::SetLightCommand { command, reply: tx })
+        .await;
     match rx.await {
         Ok(Ok(())) => Json(serde_json::json!({"ok": true})),
         Ok(Err(e)) => Json(serde_json::json!({"ok": false, "error": e})),

@@ -141,7 +141,7 @@ mod tests {
         // "ABC" is 3 bytes — needs 1 byte of padding
         let encoded = encode_sl_string("ABC");
         assert_eq!(encoded.len(), 8); // 4 length + 3 chars + 1 pad
-        // Verify the padding byte is zero
+                                      // Verify the padding byte is zero
         assert_eq!(encoded[7], 0);
         let mut cursor = Cursor::new(&encoded);
         let decoded = decode_sl_string(&mut cursor).unwrap();

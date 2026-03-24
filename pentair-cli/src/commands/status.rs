@@ -27,7 +27,10 @@ pub async fn run(backend: &mut Backend, json: bool) -> Result<(), Box<dyn std::e
         println!("  Temperature:   {}{}", body.current_temp, unit);
         println!("  Set Point:     {}{}", body.set_point, unit);
         println!("  Cool Set Point:{}{}", body.cool_set_point, unit);
-        println!("  Heat Mode:     {}", output::format_heat_mode(body.heat_mode));
+        println!(
+            "  Heat Mode:     {}",
+            output::format_heat_mode(body.heat_mode)
+        );
         println!(
             "  Heat Status:   {}",
             output::format_heat_status(body.heat_status)

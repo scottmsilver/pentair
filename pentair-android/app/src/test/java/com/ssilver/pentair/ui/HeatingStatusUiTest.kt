@@ -68,4 +68,25 @@ class HeatingStatusUiTest {
 
         assertEquals("Off", status?.label)
     }
+
+    @Test
+    fun `sensor warmup body shows heating instead of heat error`() {
+        val spa = SpaState(
+            on = true,
+            active = true,
+            temperature = 93,
+            temperature_reliable = false,
+            temperature_reason = "sensor-warmup",
+            last_reliable_temperature = 93,
+            last_reliable_temperature_at_unix_ms = 1_000L,
+            setpoint = 102,
+            heat_mode = "heat-pump",
+            heating = "off",
+            accessories = emptyMap(),
+        )
+
+        val status = spaHeatingStatus(spa, pool = null, sharedPump = true)
+
+        assertEquals("Heating", status?.label)
+    }
 }

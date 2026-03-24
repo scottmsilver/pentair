@@ -97,12 +97,16 @@ pub async fn set(
     let circuit_id = output::resolve_circuit(circuit, &config)
         .ok_or_else(|| format!("Unknown circuit: {}", circuit))?;
 
-    let start_time =
-        output::parse_time(start).ok_or_else(|| format!("Invalid start time: {} (use HH:MM)", start))?;
-    let stop_time =
-        output::parse_time(stop).ok_or_else(|| format!("Invalid stop time: {} (use HH:MM)", stop))?;
-    let day_mask = output::parse_day_mask(days)
-        .ok_or_else(|| format!("Invalid days: {} (use MoTuWe... or daily/weekdays/weekends)", days))?;
+    let start_time = output::parse_time(start)
+        .ok_or_else(|| format!("Invalid start time: {} (use HH:MM)", start))?;
+    let stop_time = output::parse_time(stop)
+        .ok_or_else(|| format!("Invalid stop time: {} (use HH:MM)", stop))?;
+    let day_mask = output::parse_day_mask(days).ok_or_else(|| {
+        format!(
+            "Invalid days: {} (use MoTuWe... or daily/weekdays/weekends)",
+            days
+        )
+    })?;
 
     backend
         .set_schedule_event(id, circuit_id, start_time, stop_time, day_mask, heat)

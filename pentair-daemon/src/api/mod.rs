@@ -1,11 +1,11 @@
 pub mod routes;
 pub mod websocket;
 
-use axum::Router;
 use crate::adapter::AdapterCommand;
-use crate::state::SharedState;
-use tokio::sync::{broadcast, mpsc};
 use crate::adapter::PushEvent;
+use crate::state::SharedState;
+use axum::Router;
+use tokio::sync::{broadcast, mpsc};
 
 pub fn create_router(
     state: SharedState,

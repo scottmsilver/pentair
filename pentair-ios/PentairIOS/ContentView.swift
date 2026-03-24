@@ -255,7 +255,7 @@ struct ContentView: View {
     private func poolCard(system: PoolSystem, pool: BodyState) -> some View {
         bodyCard(
             title: "Pool",
-            temperature: pool.temperature,
+            presentation: pool.temperaturePresentation(),
             setpoint: pool.setpoint,
             setpointAction: {
                 setpointTarget = makeSetpointTarget(
@@ -280,7 +280,7 @@ struct ContentView: View {
 
         return bodyCard(
             title: "Spa",
-            temperature: spa.temperature,
+            presentation: spa.temperaturePresentation(),
             setpoint: spa.setpoint,
             setpointAction: {
                 setpointTarget = makeSetpointTarget(
@@ -417,18 +417,44 @@ struct ContentView: View {
         ]
     }
 
-    private func bodySummary(temperature: Int) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("\(temperature)°")
-                .font(.system(size: 44, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-            Spacer()
+    private func bodySummary(
+        presentation: BodyTemperaturePresentation
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                temperatureLine(
+                    presentation: presentation
+                )
+                Spacer()
+            }
+
+            if let detailText = presentation.detailText {
+                Text(detailText)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(bodyDetailColor(isStale: presentation.isStale))
+            }
         }
+    }
+
+    private func temperatureLine(
+        presentation: BodyTemperaturePresentation
+    ) -> Text {
+        let base = Text(presentation.temperatureText)
+        .font(.system(size: 44, weight: .bold, design: .rounded))
+        .foregroundStyle(presentation.isStale ? .white.opacity(0.72) : .white)
+
+        guard let staleText = presentation.staleText else {
+            return base
+        }
+
+        return base + Text(" \(staleText)")
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(bodyDetailColor(isStale: presentation.isStale))
     }
 
     private func bodyCard<StatusContent: View, ControlsContent: View>(
         title: String,
-        temperature: Int,
+        presentation: BodyTemperaturePresentation,
         setpoint: Int,
         setpointAction: @escaping () -> Void,
         @ViewBuilder status: () -> StatusContent,
@@ -444,7 +470,9 @@ struct ContentView: View {
                     status()
                 }
 
-                bodySummary(temperature: temperature)
+                bodySummary(
+                    presentation: presentation
+                )
                 controls()
 
                 setpointButton(
@@ -490,6 +518,10 @@ struct ContentView: View {
         Text(status.text)
             .font(.caption.weight(.medium))
             .foregroundStyle(heatingStatusColor(status))
+    }
+
+    private func bodyDetailColor(isStale: Bool) -> Color {
+        isStale ? .white.opacity(0.62) : .white.opacity(0.76)
     }
 
     private func auxiliaryBinding(for auxiliary: AuxiliaryState) -> Binding<Bool> {

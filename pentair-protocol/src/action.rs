@@ -323,7 +323,12 @@ mod tests {
         for &(code, expected) in codes {
             let parsed = Action::try_from(code).expect(&format!("code {} should parse", code));
             assert_eq!(parsed, expected, "code {} parsed to wrong variant", code);
-            assert_eq!(u16::from(parsed), code, "variant {:?} encoded wrong", expected);
+            assert_eq!(
+                u16::from(parsed),
+                code,
+                "variant {:?} encoded wrong",
+                expected
+            );
         }
     }
 

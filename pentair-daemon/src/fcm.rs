@@ -115,7 +115,10 @@ impl FcmSender {
         let sa_json = match std::fs::read_to_string(service_account_path) {
             Ok(json) => json,
             Err(e) => {
-                error!("failed to read FCM service account file '{}': {}", service_account_path, e);
+                error!(
+                    "failed to read FCM service account file '{}': {}",
+                    service_account_path, e
+                );
                 return None;
             }
         };
@@ -128,8 +131,10 @@ impl FcmSender {
             }
         };
 
-        info!("FCM configured for project '{}' with service account '{}'",
-            project_id, service_account.client_email);
+        info!(
+            "FCM configured for project '{}' with service account '{}'",
+            project_id, service_account.client_email
+        );
 
         Some(Self {
             project_id,
@@ -171,7 +176,8 @@ impl FcmSender {
             .map_err(|e| format!("JWT signing failed: {}", e))?;
 
         // Exchange JWT for access token
-        let resp = self.http
+        let resp = self
+            .http
             .post(&self.service_account.token_uri)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
@@ -241,7 +247,8 @@ impl FcmSender {
                 },
             };
 
-            let result = self.http
+            let result = self
+                .http
                 .post(&url)
                 .bearer_auth(&access_token)
                 .json(&message)

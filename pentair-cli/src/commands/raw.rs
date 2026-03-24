@@ -58,5 +58,9 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join("")
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join("")
 }

@@ -56,6 +56,7 @@ history_path = "~/.pentair/heat-estimator.json"
 sample_window_minutes = 180
 minimum_runtime_minutes = 10
 minimum_temp_rise_f = 1.0
+shared_equipment_temp_warmup_seconds = 120
 
 [heating.heater]
 kind = "gas"            # gas | heat-pump | hybrid
@@ -66,7 +67,10 @@ efficiency = 0.84       # optional; default depends on kind
 volume_gallons = 16000
 
 [heating.spa]
-volume_gallons = 500
+[heating.spa.dimensions]
+length_ft = 8
+width_ft = 8
+depth_ft = 4
 ```
 
 Rust shape in [`pentair-daemon/src/config.rs`](../../pentair-daemon/src/config.rs):
@@ -79,6 +83,7 @@ pub struct HeatingConfig {
     pub sample_window_minutes: u64,
     pub minimum_runtime_minutes: u64,
     pub minimum_temp_rise_f: f32,
+    pub shared_equipment_temp_warmup_seconds: u64,
     pub heater: HeaterConfig,
     pub pool: BodyHeatingConfig,
     pub spa: BodyHeatingConfig,
@@ -94,7 +99,21 @@ pub struct HeaterConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BodyHeatingConfig {
     pub volume_gallons: Option<f64>,
+    pub dimensions: Option<BodyDimensionsConfig>,
 }
+
+pub struct BodyDimensionsConfig {
+    pub length_ft: Option<f64>,
+    pub width_ft: Option<f64>,
+    pub average_depth_ft: Option<f64>, // `depth_ft` accepted as a config alias
+    pub shape_factor: f64,             // defaults to 1.0
+}
+```
+
+The daemon should accept either an explicit `volume_gallons` or dimensions and derive gallons as:
+
+```text
+volume_gallons = length_ft * width_ft * average_depth_ft * 7.48 * shape_factor
 ```
 
 ## API Shape
@@ -109,7 +128,7 @@ pub struct HeatEstimate {
     pub target_temperature: i32,
     pub confidence: String,          // none | low | medium | high
     pub source: String,              // configured | observed | blended
-    pub reason: String,              // not-heating | missing-config | insufficient-data | estimating
+    pub reason: String,              // not-heating | sensor-warmup | inactive-shared-body | missing-config | insufficient-data | estimating
     pub observed_rate_f_per_hour: Option<f64>,
     pub configured_rate_f_per_hour: Option<f64>,
     pub updated_at_unix_ms: i64,
@@ -121,14 +140,20 @@ Attach as:
 ```rust
 pub struct BodyState {
     ...
+    pub temperature_reliable: bool,
+    pub temperature_reason: Option<String>,
     pub heat_estimate: Option<HeatEstimate>,
 }
 
 pub struct SpaState {
     ...
+    pub temperature_reliable: bool,
+    pub temperature_reason: Option<String>,
     pub heat_estimate: Option<HeatEstimate>,
 }
 ```
+
+For shared-equipment systems, the inactive body temperature should be treated as low-confidence, and the newly active body should remain low-confidence until `shared_equipment_temp_warmup_seconds` has elapsed with flow active.
 
 Example API result:
 
