@@ -271,6 +271,58 @@ struct DiagnosticEvent: Identifiable {
     let message: String
 }
 
+struct PendingPoolMutation {
+    let id: UUID
+    let description: String
+    let createdAt: Date
+    let mutate: (PoolSystem) -> PoolSystem
+    let verify: (PoolSystem) -> Bool
+
+    init(
+        id: UUID = UUID(),
+        description: String,
+        createdAt: Date = Date(),
+        mutate: @escaping (PoolSystem) -> PoolSystem,
+        verify: @escaping (PoolSystem) -> Bool
+    ) {
+        self.id = id
+        self.description = description
+        self.createdAt = createdAt
+        self.mutate = mutate
+        self.verify = verify
+    }
+}
+
+struct ReconciledPoolState {
+    let system: PoolSystem
+    let remainingMutations: [PendingPoolMutation]
+}
+
+func reconcileServerSnapshot(
+    _ serverState: PoolSystem,
+    pendingMutations: [PendingPoolMutation],
+    now: Date = Date(),
+    gracePeriod: TimeInterval = 15
+) -> ReconciledPoolState {
+    var merged = serverState
+    var remainingMutations: [PendingPoolMutation] = []
+
+    for mutation in pendingMutations {
+        if mutation.verify(serverState) {
+            continue
+        }
+
+        if now.timeIntervalSince(mutation.createdAt) > gracePeriod {
+            continue
+        }
+
+        remainingMutations.append(mutation)
+        merged = mutation.mutate(merged)
+    }
+
+    return ReconciledPoolState(system: merged, remainingMutations: remainingMutations)
+}
+
 extension PoolSystem {
     func updating(
         pool: BodyState? = nil,

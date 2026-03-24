@@ -39,7 +39,8 @@ High level flow:
 2. `pentair-daemon` consumes raw controller state and builds a semantic `PoolSystem`.
 3. The daemon advertises `_pentair._tcp` over mDNS/Bonjour.
 4. Mobile clients discover the daemon and render `/api/pool`.
-5. UI actions call semantic endpoints like `/api/spa/on` or `/api/lights/mode`.
+5. Mobile clients keep `/api/ws` open and apply full semantic snapshots as they arrive.
+6. UI actions call semantic endpoints like `/api/spa/on` or `/api/lights/mode`.
 
 More detail is in [ARCHITECTURE.md](/home/ssilver/development/pentair/ARCHITECTURE.md).
 
@@ -98,7 +99,7 @@ xcodebuild -project PentairIOS.xcodeproj -scheme PentairIOS -destination "platfo
 
 The primary client API is:
 - `GET /api/pool`
-- `GET /api/ws`
+- `GET /api/ws` for full semantic state snapshots
 
 See [docs/api-spec.md](/home/ssilver/development/pentair/docs/api-spec.md).
 

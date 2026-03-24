@@ -49,13 +49,13 @@ pub enum AdapterCommand {
     },
 }
 
-/// Push events sent to WebSocket subscribers
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(tag = "type")]
+/// Push triggers sent to WebSocket subscribers.
+///
+/// The websocket API now sends full semantic `PoolSystem` snapshots, so the
+/// broadcast channel only needs a generic "state changed" trigger.
+#[derive(Debug, Clone)]
 pub enum PushEvent {
     StatusChanged,
-    ChemistryChanged,
-    ConfigChanged,
 }
 
 pub async fn run_adapter(

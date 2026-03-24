@@ -342,20 +342,28 @@ Force a full data refresh from the adapter (status, config, chem, pumps).
 
 ### GET /api/ws → WebSocket upgrade
 
-Subscribe to real-time push events. The daemon sends a JSON message whenever pool state changes.
+Subscribe to real-time semantic state snapshots. When semantic state is
+available, the daemon sends a full
+`GET /api/pool`-shaped JSON payload:
+- after the websocket connects, once current semantic state is available
+- whenever the daemon observes a state change
 
-**Event format:**
+**Message format:**
 
 ```json
-{"type": "StatusChanged"}
+{
+  "pool": { "...": "same shape as GET /api/pool" },
+  "spa": { "...": "same shape as GET /api/pool" },
+  "lights": { "...": "same shape as GET /api/pool" },
+  "pump": { "...": "same shape as GET /api/pool" },
+  "auxiliaries": [],
+  "system": { "...": "same shape as GET /api/pool" }
+}
 ```
 
-**Event types:**
-- `StatusChanged` — pool/spa/circuit state updated
-- `ChemistryChanged` — chemistry data updated
-- `ConfigChanged` — controller config updated
-
-**Recommended usage:** On receiving any event, re-fetch `GET /api/pool` to get the latest state.
+**Recommended usage:** Clients should treat each websocket message as the new
+authoritative semantic snapshot. A separate `GET /api/pool` refresh is only
+needed for reconnect/bootstrap fallback.
 
 ---
 

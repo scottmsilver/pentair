@@ -48,6 +48,7 @@ class PoolRepository @Inject constructor(
     private val discovery: DaemonDiscovery,
 ) : DefaultLifecycleObserver {
     private val moshi = Moshi.Builder().build()
+    private val poolSystemAdapter = moshi.adapter(PoolSystem::class.java)
 
     private val _state = MutableStateFlow<PoolSystem?>(null)
     val state: StateFlow<PoolSystem?> = _state.asStateFlow()
@@ -160,17 +161,7 @@ class PoolRepository @Inject constructor(
             recordDiagnostic("http", "GET $address/api/pool")
             val result = api?.getPool()
             if (result != null) {
-                reconcilePendingChanges(result)
-            }
-            synchronized(stateLock) {
-                var merged = result
-                // Re-apply pending optimistic mutations so they aren't overwritten by stale server state
-                if (merged != null) {
-                    for (change in _pendingChanges) {
-                        merged = change.mutate(merged!!)
-                    }
-                }
-                _state.value = merged
+                applyServerState(result)
             }
             _connectionState.value = ConnectionState.CONNECTED
             reconnectDelay.set(1000L)
@@ -260,7 +251,18 @@ class PoolRepository @Inject constructor(
         val request = Request.Builder().url(wsUrl).build()
         webSocket = okHttp.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(ws: WebSocket, text: String) {
-                scope.launch { refresh() }
+                scope.launch {
+                    val serverState = runCatching { poolSystemAdapter.fromJson(text) }.getOrNull()
+                    if (serverState != null) {
+                        applyServerState(serverState)
+                        _connectionState.value = ConnectionState.CONNECTED
+                        reconnectDelay.set(1000L)
+                        recordDiagnostic("websocket", "Applied daemon state snapshot")
+                    } else {
+                        recordDiagnostic("websocket", "Failed to decode daemon state snapshot")
+                        refresh()
+                    }
+                }
             }
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
                 _connectionState.value = ConnectionState.DISCONNECTED
@@ -481,6 +483,17 @@ class PoolRepository @Inject constructor(
             .takeLast(40)
     }
 
+    private fun applyServerState(serverState: PoolSystem) {
+        reconcilePendingChanges(serverState)
+        synchronized(stateLock) {
+            var merged = serverState
+            for (change in _pendingChanges) {
+                merged = change.mutate(merged)
+            }
+            _state.value = merged
+        }
+    }
+
     private suspend fun tryConnect(address: String): Boolean {
         ensureApi(address)
         _connectionState.value = ConnectionState.CONNECTING
@@ -490,14 +503,7 @@ class PoolRepository @Inject constructor(
             try {
                 recordDiagnostic("http", "GET $address/api/pool")
                 val result = api?.getPool() ?: throw IllegalStateException("API not ready")
-                reconcilePendingChanges(result)
-                synchronized(stateLock) {
-                    var merged = result
-                    for (change in _pendingChanges) {
-                        merged = change.mutate(merged)
-                    }
-                    _state.value = merged
-                }
+                applyServerState(result)
                 _connectionState.value = ConnectionState.CONNECTED
                 reconnectDelay.set(1000L)
                 recordDiagnostic("http", "GET /api/pool succeeded")

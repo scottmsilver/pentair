@@ -4,6 +4,7 @@ import OSLog
 @MainActor
 final class PoolViewModel: ObservableObject {
     private static let logger = Logger(subsystem: "com.ssilver.pentair.ios", category: "client")
+    private let decoder = JSONDecoder()
 
     @Published var system: PoolSystem?
     @Published var connectionState: ConnectionState = .discovering
@@ -29,6 +30,7 @@ final class PoolViewModel: ObservableObject {
     private var wsReconnectDelay: TimeInterval = 2.0
     private var bannerDismissTask: Task<Void, Never>?
     private var discoveryHintTask: Task<Void, Never>?
+    private var pendingMutations: [PendingPoolMutation] = []
 
     init() {
         if let savedAddress = defaults.string(forKey: addressDefaultsKey),
@@ -134,10 +136,16 @@ final class PoolViewModel: ObservableObject {
     }
 
     func setPoolMode(_ mode: PoolBodyMode) {
-        applyOptimistic { current in
+        let turnOn = mode == .on
+        let pendingMutationID = applyOptimistic(
+            description: "Pool \(mode.rawValue)",
+            verify: { current in
+                current.pool?.on == turnOn
+            }
+        ) { current in
             current.updating(
                 pool: current.pool?.optimisticCommand(
-                    on: mode == .on,
+                    on: turnOn,
                     sharedPump: current.system.poolSpaSharedPump
                 )
             )
@@ -147,9 +155,9 @@ final class PoolViewModel: ObservableObject {
         Task {
             switch mode {
             case .off:
-                await sendCommand(path: "/api/pool/off")
+                await sendCommand(path: "/api/pool/off", pendingMutationID: pendingMutationID)
             case .on:
-                await sendCommand(path: "/api/pool/on")
+                await sendCommand(path: "/api/pool/on", pendingMutationID: pendingMutationID)
             }
         }
     }
@@ -158,7 +166,23 @@ final class PoolViewModel: ObservableObject {
         let currentSpa = system?.spa
         recordDiagnostic("command", "Spa \(mode.rawValue)")
 
-        applyOptimistic { current in
+        let pendingMutationID = applyOptimistic(
+            description: "Spa \(mode.rawValue)",
+            verify: { current in
+                guard let spa = current.spa else {
+                    return false
+                }
+
+                switch mode {
+                case .off:
+                    return spa.on == false
+                case .spa:
+                    return spa.on == true && spa.accessories["jets"] != true
+                case .jets:
+                    return spa.on == true && spa.accessories["jets"] == true
+                }
+            }
+        ) { current in
             let nextSpa: SpaState?
             switch mode {
             case .off:
@@ -187,28 +211,36 @@ final class PoolViewModel: ObservableObject {
         Task {
             switch mode {
             case .off:
-                await sendCommand(path: "/api/spa/off")
+                await sendCommand(path: "/api/spa/off", pendingMutationID: pendingMutationID)
             case .spa:
                 if currentSpa?.accessories["jets"] == true {
-                    await sendCommand(path: "/api/spa/jets/off", refreshDelay: 300_000_000)
+                    await sendCommand(path: "/api/spa/jets/off", refreshDelay: 300_000_000, pendingMutationID: pendingMutationID)
                 }
                 if currentSpa?.on != true {
-                    await sendCommand(path: "/api/spa/on")
+                    await sendCommand(path: "/api/spa/on", pendingMutationID: pendingMutationID)
                 } else {
                     await refresh(silent: true)
                 }
             case .jets:
                 if currentSpa?.on != true {
-                    await sendCommand(path: "/api/spa/on", refreshDelay: 700_000_000)
+                    await sendCommand(path: "/api/spa/on", refreshDelay: 700_000_000, pendingMutationID: pendingMutationID)
                 }
-                await sendCommand(path: "/api/spa/jets/on")
+                await sendCommand(path: "/api/spa/jets/on", pendingMutationID: pendingMutationID)
             }
         }
     }
 
     func setLightMode(_ mode: String) {
         recordDiagnostic("command", "Lights \(mode)")
-        applyOptimistic { current in
+        let pendingMutationID = applyOptimistic(
+            description: "Lights \(mode)",
+            verify: { current in
+                if mode == "off" {
+                    return current.lights?.on == false
+                }
+                return current.lights?.on == true && current.lights?.mode == mode
+            }
+        ) { current in
             current.updating(
                 lights: current.lights?.updating(
                     on: mode != "off",
@@ -219,16 +251,26 @@ final class PoolViewModel: ObservableObject {
 
         Task {
             if mode == "off" {
-                await sendCommand(path: "/api/lights/off")
+                await sendCommand(path: "/api/lights/off", pendingMutationID: pendingMutationID)
             } else {
-                await sendCommand(path: "/api/lights/mode", body: ["mode": mode])
+                await sendCommand(path: "/api/lights/mode", body: ["mode": mode], pendingMutationID: pendingMutationID)
             }
         }
     }
 
     func setSetpoint(body: String, temperature: Int) {
         recordDiagnostic("command", "\(body.capitalized) setpoint \(temperature)")
-        applyOptimistic { current in
+        let pendingMutationID = applyOptimistic(
+            description: "\(body.capitalized) setpoint \(temperature)",
+            verify: { current in
+                switch body {
+                case "spa":
+                    return current.spa?.setpoint == temperature
+                default:
+                    return current.pool?.setpoint == temperature
+                }
+            }
+        ) { current in
             switch body {
             case "spa":
                 return current.updating(spa: current.spa?.optimisticSetpointChange(temperature))
@@ -239,14 +281,20 @@ final class PoolViewModel: ObservableObject {
 
         Task {
             let endpoint = body == "spa" ? "/api/spa/heat" : "/api/pool/heat"
-            await sendCommand(path: endpoint, body: ["setpoint": temperature])
+            await sendCommand(path: endpoint, body: ["setpoint": temperature], pendingMutationID: pendingMutationID)
         }
     }
 
     func toggleAuxiliary(_ auxiliary: AuxiliaryState) {
         let targetState = auxiliary.on ? "off" : "on"
         recordDiagnostic("command", "Aux \(auxiliary.id) \(targetState)")
-        applyOptimistic { current in
+        let nextState = !auxiliary.on
+        let pendingMutationID = applyOptimistic(
+            description: "Aux \(auxiliary.id) \(targetState)",
+            verify: { current in
+                current.auxiliaries.first(where: { $0.id == auxiliary.id })?.on == nextState
+            }
+        ) { current in
             current.updating(
                 auxiliaries: current.auxiliaries.map { item in
                     item.id == auxiliary.id ? item.updating(on: !auxiliary.on) : item
@@ -254,7 +302,7 @@ final class PoolViewModel: ObservableObject {
             )
         }
         Task {
-            await sendCommand(path: "/api/auxiliary/\(auxiliary.id)/\(targetState)")
+            await sendCommand(path: "/api/auxiliary/\(auxiliary.id)/\(targetState)", pendingMutationID: pendingMutationID)
         }
     }
 
@@ -299,7 +347,7 @@ final class PoolViewModel: ObservableObject {
         recordDiagnostic("http", "GET \(api.baseURL.absoluteString)/api/pool")
 
         do {
-            system = try await api.fetchPool()
+            applyServerState(try await api.fetchPool())
             connectionState = .connected
             statusMessage = nil
             discoveryHintTask?.cancel()
@@ -312,7 +360,12 @@ final class PoolViewModel: ObservableObject {
         }
     }
 
-    private func sendCommand(path: String, body: [String: Any]? = nil, refreshDelay: UInt64 = 800_000_000) async {
+    private func sendCommand(
+        path: String,
+        body: [String: Any]? = nil,
+        refreshDelay: UInt64 = 800_000_000,
+        pendingMutationID: UUID? = nil
+    ) async {
         guard let api else {
             return
         }
@@ -326,17 +379,30 @@ final class PoolViewModel: ObservableObject {
             await refresh(silent: true)
         } catch {
             recordDiagnostic("http", "POST \(path) failed: \(error.localizedDescription)")
+            removePendingMutation(id: pendingMutationID)
             presentBanner(error.localizedDescription)
             await refresh(silent: true)
         }
     }
 
-    private func applyOptimistic(_ mutate: (PoolSystem) -> PoolSystem) {
+    @discardableResult
+    private func applyOptimistic(
+        description: String,
+        verify: @escaping (PoolSystem) -> Bool,
+        mutate: @escaping (PoolSystem) -> PoolSystem
+    ) -> UUID? {
         guard let system else {
-            return
+            return nil
         }
 
+        let pendingMutation = PendingPoolMutation(
+            description: description,
+            mutate: mutate,
+            verify: verify
+        )
+        pendingMutations.append(pendingMutation)
         self.system = mutate(system)
+        return pendingMutation.id
     }
 
     private func setActiveBaseURL(_ url: URL) {
@@ -386,10 +452,34 @@ final class PoolViewModel: ObservableObject {
                 }
 
                 switch result {
-                case .success(_):
+                case .success(let message):
                     self.wsReconnectDelay = 2.0
-                    self.recordDiagnostic("websocket", "Received daemon event")
-                    await self.refresh(silent: true)
+                    switch message {
+                    case .string(let text):
+                        if let data = text.data(using: .utf8),
+                           let serverState = try? self.decoder.decode(PoolSystem.self, from: data) {
+                            self.applyServerState(serverState)
+                            self.connectionState = .connected
+                            self.statusMessage = nil
+                            self.recordDiagnostic("websocket", "Applied daemon state snapshot")
+                        } else {
+                            self.recordDiagnostic("websocket", "Failed to decode daemon state snapshot")
+                            await self.refresh(silent: true)
+                        }
+                    case .data(let data):
+                        if let serverState = try? self.decoder.decode(PoolSystem.self, from: data) {
+                            self.applyServerState(serverState)
+                            self.connectionState = .connected
+                            self.statusMessage = nil
+                            self.recordDiagnostic("websocket", "Applied daemon state snapshot")
+                        } else {
+                            self.recordDiagnostic("websocket", "Failed to decode binary daemon state snapshot")
+                            await self.refresh(silent: true)
+                        }
+                    @unknown default:
+                        self.recordDiagnostic("websocket", "Received unsupported daemon websocket payload")
+                        await self.refresh(silent: true)
+                    }
                     self.receiveNextMessage(from: task)
                 case .failure(let error):
                     self.handleWebSocketFailure(error, task: task)
@@ -431,6 +521,22 @@ final class PoolViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             self?.bannerMessage = nil
         }
+    }
+
+    private func applyServerState(_ serverState: PoolSystem) {
+        let reconciled = reconcileServerSnapshot(
+            serverState,
+            pendingMutations: pendingMutations
+        )
+        pendingMutations = reconciled.remainingMutations
+        system = reconciled.system
+    }
+
+    private func removePendingMutation(id: UUID?) {
+        guard let id else {
+            return
+        }
+        pendingMutations.removeAll { $0.id == id }
     }
 
     private func scheduleDiscoveryHint() {

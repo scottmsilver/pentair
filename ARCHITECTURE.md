@@ -79,7 +79,8 @@ Normal read path:
    - stale temperature snapshots
    - heat estimate
    - display contracts
-5. clients fetch `/api/pool` or subscribe to `/api/ws`
+5. clients fetch `/api/pool` for bootstrap/fallback and subscribe to `/api/ws`
+6. `/api/ws` delivers full semantic `PoolSystem` snapshots, not event stubs
 
 Normal write path:
 

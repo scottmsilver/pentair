@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import okhttp3.WebSocket
+import com.squareup.moshi.Moshi
 
 /**
  * A testable version of the repository's optimistic update logic,
@@ -18,6 +19,8 @@ import okhttp3.WebSocket
 class TestablePoolRepository(
     private val api: PoolApiClient,
 ) {
+    private val moshi = Moshi.Builder().build()
+    private val poolSystemAdapter = moshi.adapter(PoolSystem::class.java)
     private val _state = MutableStateFlow<PoolSystem?>(null)
     val state: StateFlow<PoolSystem?> = _state.asStateFlow()
 
@@ -62,8 +65,32 @@ class TestablePoolRepository(
         verify: (PoolSystem) -> Boolean,
     ) = applyOptimistic(description, mutate, verify)
 
+    fun testApplyServerState(serverState: PoolSystem) {
+        reconcilePendingChanges(serverState, elapsedMs = 0)
+        synchronized(stateLock) {
+            var merged = serverState
+            for (change in _pendingChanges) {
+                merged = change.mutate(merged)
+            }
+            _state.value = merged
+        }
+    }
+
+    fun testSerialize(serverState: PoolSystem): String {
+        return poolSystemAdapter.toJson(serverState)
+    }
+
+    fun testApplyWebSocketMessage(text: String) {
+        val parsed = poolSystemAdapter.fromJson(text) ?: return
+        testApplyServerState(parsed)
+    }
+
     /** Reconcile with a given server state and simulated elapsed time */
     fun testReconcile(serverState: PoolSystem, elapsedMs: Long) {
+        reconcilePendingChanges(serverState, elapsedMs)
+    }
+
+    private fun reconcilePendingChanges(serverState: PoolSystem, elapsedMs: Long) {
         synchronized(stateLock) {
             val iterator = _pendingChanges.iterator()
             while (iterator.hasNext()) {

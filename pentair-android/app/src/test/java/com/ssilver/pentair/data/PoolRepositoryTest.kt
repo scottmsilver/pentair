@@ -238,6 +238,32 @@ class PoolRepositoryTest {
     }
 
     @Test
+    fun `server snapshot application preserves pending optimistic state`() = runTest {
+        repo.testApplyOptimistic(
+            description = "Pool setpoint 82",
+            mutate = { it.copy(pool = it.pool?.copy(setpoint = 82)) },
+            verify = { it.pool?.setpoint == 82 },
+        )
+
+        repo.testApplyServerState(baseSystem)
+
+        assertEquals(82, repo.state.value?.pool?.setpoint)
+    }
+
+    @Test
+    fun `websocket snapshot updates state without refresh call`() = runTest {
+        repo.setState(null)
+
+        val payload = repo.testSerialize(baseSystem)
+        repo.testApplyWebSocketMessage(payload)
+
+        assertNotNull(repo.state.value)
+        assertEquals(baseSystem.system.controller, repo.state.value?.system?.controller)
+        assertEquals(baseSystem.pool?.temperature, repo.state.value?.pool?.temperature)
+        assertEquals(baseSystem.spa?.setpoint, repo.state.value?.spa?.setpoint)
+    }
+
+    @Test
     fun `pending change within grace period is not rejected`() = runTest {
         repo.rejections.test {
             repo.testApplyOptimistic(
