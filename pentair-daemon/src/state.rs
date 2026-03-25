@@ -1,5 +1,6 @@
-use crate::config::HeatingConfig;
+use crate::config::{HeatingConfig, SpaHeatNotificationsConfig};
 use crate::heat::HeatEstimator;
+use crate::spa_notifications::SpaHeatNotificationEvent;
 use pentair_protocol::responses::*;
 use pentair_protocol::semantic::{self, CircuitMap, PoolSystem, PoolSystemInput};
 use std::path::PathBuf;
@@ -32,6 +33,18 @@ impl CachedState {
         self.circuit_map.as_ref()?.resolve(id)
     }
 
+    pub fn pool_system_and_spa_notification_events(
+        &mut self,
+    ) -> (Option<PoolSystem>, Vec<SpaHeatNotificationEvent>) {
+        let Some((mut system, _)) = self.build_semantic() else {
+            return (None, Vec::new());
+        };
+
+        self.heat.apply_to_system(&mut system);
+        let events = self.heat.spa_heat_notification_events_for_system(&system);
+        (Some(system), events)
+    }
+
     pub fn refresh_semantic_state(&mut self) {
         if let Some((system, map)) = self.build_semantic() {
             self.circuit_map = Some(map);
@@ -59,12 +72,17 @@ pub type SharedState = Arc<RwLock<CachedState>>;
 pub fn new_shared_state(
     spa_associations: Vec<String>,
     heating: HeatingConfig,
+    spa_notifications: SpaHeatNotificationsConfig,
     heating_history_path: PathBuf,
 ) -> SharedState {
     Arc::new(RwLock::new(CachedState {
         pumps: vec![None; 8],
         spa_associations,
-        heat: HeatEstimator::load(heating, heating_history_path),
+        heat: HeatEstimator::load_with_notifications(
+            heating,
+            spa_notifications,
+            heating_history_path,
+        ),
         status: None,
         config: None,
         chem: None,

@@ -4,8 +4,12 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import com.ssilver.pentair.data.DeviceTokenManager
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -16,8 +20,10 @@ import kotlin.coroutines.resume
 @Singleton
 class DaemonDiscovery @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val deviceTokenManager: DeviceTokenManager,
 ) {
     private val prefs = context.getSharedPreferences("pentair", Context.MODE_PRIVATE)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     suspend fun discover(): String? = withContext(Dispatchers.IO) {
         withTimeoutOrNull(5000L) {
@@ -47,6 +53,9 @@ class DaemonDiscovery @Inject constructor(
                                         return
                                     }
                                     prefs.edit().putString("daemon_address", addr).apply()
+                                    scope.launch {
+                                        deviceTokenManager.ensureRegistered()
+                                    }
                                     if (cont.isActive) cont.resume(addr)
                                     try {
                                         listenerHolder[0]?.let { nsdManager.stopServiceDiscovery(it) }
@@ -71,6 +80,9 @@ class DaemonDiscovery @Inject constructor(
 
     fun setManualAddress(address: String) {
         prefs.edit().putString("daemon_address", address).apply()
+        scope.launch {
+            deviceTokenManager.ensureRegistered()
+        }
     }
 
     fun connectionCandidates(discoveredAddress: String?): List<String> {
@@ -79,7 +91,7 @@ class DaemonDiscovery @Inject constructor(
         cachedAddress()?.let(candidates::add)
 
         if (isProbablyEmulator()) {
-            candidates += "http://10.0.2.2:8080"
+            candidates += EMULATOR_DAEMON_URL
         }
 
         return candidates.toList()
@@ -109,6 +121,11 @@ class DaemonDiscovery @Inject constructor(
         }
 
         return "http://$urlHost:${serviceInfo.port}"
+    }
+
+    companion object {
+        // 10.0.2.2 is the Android emulator's alias for the host machine's loopback address
+        private const val EMULATOR_DAEMON_URL = "http://10.0.2.2:8080"
     }
 
     private fun isProbablyEmulator(): Boolean =

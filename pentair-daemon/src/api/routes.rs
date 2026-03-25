@@ -318,9 +318,11 @@ struct RegisterRequest {
 async fn register_device(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
-) -> Json<serde_json::Value> {
-    state.devices.register(body.token).await;
-    Json(serde_json::json!({"ok": true}))
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.devices.register(body.token).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": e}))),
+    }
 }
 
 // ── Semantic route handlers ─────────────────────────────────────────────
@@ -360,7 +362,7 @@ struct OnRequest {
 async fn pool_on(
     State(state): State<AppState>,
     body: Option<Json<OnRequest>>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     if let Some(Json(req)) = &body {
         if let Some(sp) = req.setpoint {
             let r = apply_heat(
@@ -372,12 +374,12 @@ async fn pool_on(
                 },
             )
             .await;
-            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            if r.1.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
                 return r;
             }
         }
     }
-    set_semantic_circuit(&state, "pool", true).await
+    (StatusCode::OK, set_semantic_circuit(&state, "pool", true).await)
 }
 
 async fn pool_off(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -387,7 +389,7 @@ async fn pool_off(State(state): State<AppState>) -> Json<serde_json::Value> {
 async fn spa_on(
     State(state): State<AppState>,
     body: Option<Json<OnRequest>>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     if let Some(Json(req)) = &body {
         if let Some(sp) = req.setpoint {
             let r = apply_heat(
@@ -399,12 +401,12 @@ async fn spa_on(
                 },
             )
             .await;
-            if r.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            if r.1.0.get("ok").and_then(|v| v.as_bool()) != Some(true) {
                 return r;
             }
         }
     }
-    set_semantic_circuit(&state, "spa", true).await
+    (StatusCode::OK, set_semantic_circuit(&state, "spa", true).await)
 }
 
 async fn spa_off(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -460,11 +462,11 @@ async fn apply_heat(
     state: &AppState,
     body_name: &str,
     body: HeatRequest,
-) -> Json<serde_json::Value> {
+) -> (StatusCode, Json<serde_json::Value>) {
     let body_type = match body_name {
         "pool" => 0,
         "spa" => 1,
-        _ => return Json(serde_json::json!({"ok": false, "error": "unknown body"})),
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "unknown body"}))),
     };
 
     if let Some(setpoint) = body.setpoint {
@@ -477,8 +479,10 @@ async fn apply_heat(
                 reply: tx,
             })
             .await;
-        if let Ok(Err(e)) = rx.await {
-            return Json(serde_json::json!({"ok": false, "error": e}));
+        match rx.await {
+            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e}))),
+            Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"}))),
+            _ => {}
         }
     }
 
@@ -489,9 +493,9 @@ async fn apply_heat(
             "solar-preferred" => 2,
             "heat-pump" | "heater" => 3,
             _ => {
-                return Json(
+                return (StatusCode::BAD_REQUEST, Json(
                     serde_json::json!({"ok": false, "error": format!("unknown heat mode: {}", mode_str)}),
-                )
+                ))
             }
         };
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -503,25 +507,27 @@ async fn apply_heat(
                 reply: tx,
             })
             .await;
-        if let Ok(Err(e)) = rx.await {
-            return Json(serde_json::json!({"ok": false, "error": e}));
+        match rx.await {
+            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e}))),
+            Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"}))),
+            _ => {}
         }
     }
 
-    Json(serde_json::json!({"ok": true}))
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
 async fn pool_heat(
     State(state): State<AppState>,
     Json(body): Json<HeatRequest>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     apply_heat(&state, "pool", body).await
 }
 
 async fn spa_heat(
     State(state): State<AppState>,
     Json(body): Json<HeatRequest>,
-) -> Json<serde_json::Value> {
+) -> impl IntoResponse {
     apply_heat(&state, "spa", body).await
 }
 

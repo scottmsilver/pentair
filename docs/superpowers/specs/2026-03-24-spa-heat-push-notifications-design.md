@@ -21,6 +21,8 @@ Android already has FCM receive/display plumbing. iOS does not yet have push plu
 ## User Outcome
 
 When the spa is heating toward a target temperature, the user can receive:
+- a heating-started notification
+- a first-real-estimate notification
 - a halfway notification
 - an almost-ready notification
 - an at-temperature notification
@@ -109,6 +111,8 @@ Progress notifications are only valid once:
 ### Milestones
 
 V1 milestones:
+- `heating_started` when spa heating genuinely begins
+- `estimate_ready` when the daemon gets the first trustworthy ETA
 - `halfway` at 50%
 - `almost_ready` at 90%
 - `at_temp` at 100%
@@ -118,6 +122,8 @@ Milestones are based on progress across the run:
 `progress = (current_trusted_temp - trusted_start_temp) / (target_temp - trusted_start_temp)`
 
 Rules:
+- `heating_started` does not require ETA
+- `estimate_ready` requires the first trustworthy ETA
 - do not fire progress notifications for very small runs
 - require minimum trusted delta of `4°F` for `halfway` and `almost_ready`
 - `at_temp` still fires for any valid heating run
@@ -134,6 +140,8 @@ This avoids false notifications caused by latched off-state spa readings.
 ### Deduplication
 
 Each spa heating session tracks fired milestones:
+- `heating_started_sent`
+- `estimate_ready_sent`
 - `halfway_sent`
 - `almost_ready_sent`
 - `at_temp_sent`
@@ -156,7 +164,7 @@ Recommended internal event shape:
 ```json
 {
   "kind": "spa_heat_progress",
-  "milestone": "halfway",
+  "milestone": "estimate_ready",
   "current_temp": 97,
   "target_temp": 104,
   "minutes_remaining": 23
@@ -164,11 +172,17 @@ Recommended internal event shape:
 ```
 
 Milestone values:
+- `heating_started`
+- `estimate_ready`
 - `halfway`
 - `almost_ready`
 - `at_temp`
 
 Text defaults:
+- heating_started: `Spa heating started`
+  - body: `Heating to 104°`
+- estimate_ready: `Spa ready in about 42 min`
+  - body: `Current temperature 92°`
 - halfway: `Spa warming up`
   - body: `About halfway to 104°`
 - almost_ready: `Spa almost ready`
@@ -253,6 +267,8 @@ Follow-up will need:
 ### Daemon unit tests
 
 Add tests for:
+- heating-started fires once when spa heating genuinely begins
+- estimate-ready fires once when the first trustworthy ETA becomes available
 - halfway fires once when progress crosses 50%
 - almost_ready fires once when progress crosses 90%
 - at_temp fires once when trusted temperature reaches setpoint

@@ -35,5 +35,9 @@
 	<string>Pool discovers and connects to your local Pentair daemon on your home network.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>

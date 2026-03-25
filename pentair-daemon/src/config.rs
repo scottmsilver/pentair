@@ -25,6 +25,9 @@ pub struct Config {
 
     #[serde(default)]
     pub heating: HeatingConfig,
+
+    #[serde(default)]
+    pub notifications: NotificationsConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -33,6 +36,30 @@ pub struct FcmConfig {
     pub service_account: String,
     #[serde(default)]
     pub project_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NotificationsConfig {
+    #[serde(default)]
+    pub spa_heat: SpaHeatNotificationsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpaHeatNotificationsConfig {
+    #[serde(default = "default_notification_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_notification_enabled")]
+    pub heating_started: bool,
+    #[serde(default = "default_notification_enabled")]
+    pub estimate_ready: bool,
+    #[serde(default = "default_notification_enabled")]
+    pub halfway: bool,
+    #[serde(default = "default_notification_enabled")]
+    pub almost_ready: bool,
+    #[serde(default = "default_notification_enabled")]
+    pub at_temp: bool,
+    #[serde(default = "default_notification_minimum_delta_f")]
+    pub minimum_delta_f: f64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -115,6 +142,12 @@ fn default_minimum_temp_rise_f() -> f64 {
 fn default_shared_equipment_temp_warmup_seconds() -> u64 {
     120
 }
+fn default_notification_enabled() -> bool {
+    true
+}
+fn default_notification_minimum_delta_f() -> f64 {
+    4.0
+}
 fn default_shape_factor() -> f64 {
     1.0
 }
@@ -138,6 +171,7 @@ impl Default for Config {
             associations: Default::default(),
             fcm: Default::default(),
             heating: Default::default(),
+            notifications: Default::default(),
         }
     }
 }
@@ -169,6 +203,28 @@ impl Default for BodyDimensionsConfig {
     }
 }
 
+impl Default for NotificationsConfig {
+    fn default() -> Self {
+        Self {
+            spa_heat: Default::default(),
+        }
+    }
+}
+
+impl Default for SpaHeatNotificationsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_notification_enabled(),
+            heating_started: default_notification_enabled(),
+            estimate_ready: default_notification_enabled(),
+            halfway: default_notification_enabled(),
+            almost_ready: default_notification_enabled(),
+            at_temp: default_notification_enabled(),
+            minimum_delta_f: default_notification_minimum_delta_f(),
+        }
+    }
+}
+
 impl BodyHeatingConfig {
     pub fn effective_volume_gallons(&self) -> Option<f64> {
         self.volume_gallons.or_else(|| {
@@ -194,5 +250,48 @@ impl BodyDimensionsConfig {
         let gallons = cubic_feet * 7.48;
 
         (gallons.is_finite() && gallons > 0.0).then_some(gallons)
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::Config;
+
+    #[test]
+    fn notification_defaults_are_enabled() {
+        let config: Config = toml::from_str("").expect("default config should deserialize");
+
+        assert!(config.notifications.spa_heat.enabled);
+        assert!(config.notifications.spa_heat.heating_started);
+        assert!(config.notifications.spa_heat.estimate_ready);
+        assert!(config.notifications.spa_heat.halfway);
+        assert!(config.notifications.spa_heat.almost_ready);
+        assert!(config.notifications.spa_heat.at_temp);
+        assert_eq!(config.notifications.spa_heat.minimum_delta_f, 4.0);
+    }
+
+    #[test]
+    fn explicit_notification_settings_override_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+            [notifications.spa_heat]
+            enabled = false
+            heating_started = false
+            estimate_ready = false
+            halfway = false
+            almost_ready = false
+            at_temp = true
+            minimum_delta_f = 6.5
+            "#,
+        )
+        .expect("explicit config should deserialize");
+
+        assert!(!config.notifications.spa_heat.enabled);
+        assert!(!config.notifications.spa_heat.heating_started);
+        assert!(!config.notifications.spa_heat.estimate_ready);
+        assert!(!config.notifications.spa_heat.halfway);
+        assert!(!config.notifications.spa_heat.almost_ready);
+        assert!(config.notifications.spa_heat.at_temp);
+        assert_eq!(config.notifications.spa_heat.minimum_delta_f, 6.5);
     }
 }

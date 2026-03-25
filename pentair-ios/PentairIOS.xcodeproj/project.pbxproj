@@ -15,6 +15,11 @@
 		000000000000000000000019 /* PoolModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000018 /* PoolModels.swift */; };
 		00000000000000000000001B /* BonjourDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001A /* BonjourDiscovery.swift */; };
 		00000000000000000000001D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000001C /* Assets.xcassets */; };
+		000000000000000000000026 /* GoogleService-Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000022 /* GoogleService-Info.plist */; };
+		000000000000000000000027 /* NotificationTokenManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000023 /* NotificationTokenManager.swift */; };
+		000000000000000000000028 /* PoolAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000024 /* PoolAppDelegate.swift */; };
+		000000000000000000000029 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000002C /* FirebaseCore */; };
+		00000000000000000000002A /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000002D /* FirebaseMessaging */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +33,10 @@
 		00000000000000000000001A /* BonjourDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BonjourDiscovery.swift; sourceTree = "<group>"; };
 		00000000000000000000001C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		00000000000000000000001E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		000000000000000000000022 /* GoogleService-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "GoogleService-Info.plist"; sourceTree = "<group>"; };
+		000000000000000000000023 /* NotificationTokenManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTokenManager.swift; sourceTree = "<group>"; };
+		000000000000000000000024 /* PoolAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoolAppDelegate.swift; sourceTree = "<group>"; };
+		000000000000000000000025 /* PentairIOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PentairIOS.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -35,6 +44,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00000000000000000000002A /* FirebaseMessaging in Frameworks */,
+				000000000000000000000029 /* FirebaseCore in Frameworks */,
 				000000000000000000000020 /* AppIntents.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -67,8 +78,12 @@
 				000000000000000000000016 /* PoolAPI.swift */,
 				000000000000000000000018 /* PoolModels.swift */,
 				00000000000000000000001A /* BonjourDiscovery.swift */,
+				000000000000000000000023 /* NotificationTokenManager.swift */,
+				000000000000000000000024 /* PoolAppDelegate.swift */,
 				00000000000000000000001C /* Assets.xcassets */,
+				000000000000000000000022 /* GoogleService-Info.plist */,
 				00000000000000000000001E /* Info.plist */,
+				000000000000000000000025 /* PentairIOS.entitlements */,
 			);
 			path = PentairIOS;
 			sourceTree = "<group>";
@@ -90,6 +105,8 @@
 			);
 			name = PentairIOS;
 			packageProductDependencies = (
+				00000000000000000000002C /* FirebaseCore */,
+				00000000000000000000002D /* FirebaseMessaging */,
 			);
 			productName = PentairIOS;
 			productReference = 000000000000000000000005 /* PentairIOS.app */;
@@ -107,6 +124,11 @@
 				TargetAttributes = {
 					000000000000000000000006 = {
 						CreatedOnToolsVersion = 26.3;
+						SystemCapabilities = {
+							com.apple.Push = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -123,6 +145,9 @@
 			productRefGroup = 000000000000000000000003 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
+			packageReferences = (
+				00000000000000000000002B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
+			);
 			targets = (
 				000000000000000000000006 /* PentairIOS */,
 			);
@@ -134,6 +159,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				000000000000000000000026 /* GoogleService-Info.plist in Resources */,
 				00000000000000000000001D /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -146,15 +172,41 @@
 			buildActionMask = 2147483647;
 			files = (
 				000000000000000000000011 /* PentairIOSApp.swift in Sources */,
+				000000000000000000000028 /* PoolAppDelegate.swift in Sources */,
 				000000000000000000000013 /* ContentView.swift in Sources */,
 				000000000000000000000015 /* PoolViewModel.swift in Sources */,
 				000000000000000000000017 /* PoolAPI.swift in Sources */,
 				000000000000000000000019 /* PoolModels.swift in Sources */,
+				000000000000000000000027 /* NotificationTokenManager.swift in Sources */,
 				00000000000000000000001B /* BonjourDiscovery.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		00000000000000000000002B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		00000000000000000000002C /* FirebaseCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000002B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseCore;
+		};
+		00000000000000000000002D /* FirebaseMessaging */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 00000000000000000000002B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseMessaging;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000000000009 /* Debug */ = {
@@ -182,9 +234,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = PentairIOS/PentairIOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = A5KW8AWNPN;
+				DEVELOPMENT_TEAM = M8B368H9T5;
 				ENABLE_APP_INTENTS_METADATA_GENERATION = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -212,9 +265,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				APP_SHORTCUTS_ENABLE_FLEXIBLE_MATCHING = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = PentairIOS/PentairIOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = A5KW8AWNPN;
+				DEVELOPMENT_TEAM = M8B368H9T5;
 				ENABLE_APP_INTENTS_METADATA_GENERATION = NO;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;

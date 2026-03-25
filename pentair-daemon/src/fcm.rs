@@ -267,6 +267,10 @@ impl FcmSender {
                         401 => {
                             let body = resp.text().await.unwrap_or_default();
                             error!("FCM: auth error (401): {}", body);
+                            // Clear cached token so next send fetches a fresh one
+                            let mut cache = self.token_cache.write().await;
+                            cache.token = None;
+                            cache.expires_at = 0;
                         }
                         429 => {
                             warn!("FCM: rate limited (429)");

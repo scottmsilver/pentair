@@ -1,4 +1,5 @@
 use crate::fcm::FcmSender;
+use crate::spa_notifications::{notification_text, SpaHeatNotificationEvent};
 use crate::state::SharedState;
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Timelike};
 use pentair_client::client::Client;
@@ -107,7 +108,11 @@ pub async fn run_adapter(
                 refresh_all(&mut client, &state).await;
                 let _ = push_tx.send(PushEvent::StatusChanged);
 
-                let mut previous_system: Option<PoolSystem> = state.read().await.pool_system();
+                let mut previous_system: Option<PoolSystem> = {
+                    let mut guard = state.write().await;
+                    let (initial_system, _events) = guard.pool_system_and_spa_notification_events();
+                    initial_system
+                };
 
                 // Main loop: handle commands and periodic refresh
                 let mut refresh_interval = tokio::time::interval(Duration::from_secs(30));
@@ -122,8 +127,11 @@ pub async fn run_adapter(
                                 break;
                             }
                             // Check for transitions after commands too
-                            let current = state.read().await.pool_system();
-                            detect_transitions(&previous_system, &current, &fcm).await;
+                            let (current, spa_events) = {
+                                let mut guard = state.write().await;
+                                guard.pool_system_and_spa_notification_events()
+                            };
+                            detect_transitions(&previous_system, &current, &spa_events, &fcm).await;
                             previous_system = current;
                         }
                         _ = refresh_interval.tick() => {
@@ -132,8 +140,11 @@ pub async fn run_adapter(
                                 break;
                             }
                             let _ = push_tx.send(PushEvent::StatusChanged);
-                            let current = state.read().await.pool_system();
-                            detect_transitions(&previous_system, &current, &fcm).await;
+                            let (current, spa_events) = {
+                                let mut guard = state.write().await;
+                                guard.pool_system_and_spa_notification_events()
+                            };
+                            detect_transitions(&previous_system, &current, &spa_events, &fcm).await;
                             previous_system = current;
                         }
                         _ = ping_interval.tick() => {
@@ -426,18 +437,10 @@ fn naive_to_sl(dt: &NaiveDateTime) -> Result<SLDateTime, ()> {
     })
 }
 
-// ─── FCM event detection ────────────────────────────────────────────────
-
-fn spa_is_ready(system: &PoolSystem) -> bool {
-    system
-        .spa
-        .as_ref()
-        .map_or(false, |spa| spa.on && spa.temperature >= spa.setpoint)
-}
-
 async fn detect_transitions(
     previous: &Option<PoolSystem>,
     current: &Option<PoolSystem>,
+    spa_events: &[SpaHeatNotificationEvent],
     fcm: &Option<Arc<FcmSender>>,
 ) {
     let sender = match fcm {
@@ -449,19 +452,9 @@ async fn detect_transitions(
         _ => return,
     };
 
-    // Spa ready: spa on + temp >= setpoint, transitioning from not-ready to ready
-    if spa_is_ready(curr) && !spa_is_ready(prev) {
-        if let Some(ref spa) = curr.spa {
-            sender
-                .send(
-                    "Spa Ready",
-                    &format!(
-                        "Spa has reached {}{}.",
-                        spa.temperature, curr.system.temp_unit
-                    ),
-                )
-                .await;
-        }
+    for event in spa_events {
+        let (title, body) = notification_text(event, &curr.system.temp_unit);
+        sender.send(&title, &body).await;
     }
 
     // Freeze protection activated
@@ -469,18 +462,6 @@ async fn detect_transitions(
         sender
             .send("Freeze Protection", "Freeze protection has been activated.")
             .await;
-    }
-
-    // Heater started (spa)
-    if let (Some(prev_spa), Some(curr_spa)) = (&prev.spa, &curr.spa) {
-        if prev_spa.heating == "off" && curr_spa.heating != "off" {
-            sender
-                .send(
-                    "Spa Heater Started",
-                    &format!("Spa heater is now active ({}).", curr_spa.heating),
-                )
-                .await;
-        }
     }
 
     // Heater started (pool)

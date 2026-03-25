@@ -1,4 +1,8 @@
-use crate::config::HeatingConfig;
+use crate::config::{HeatingConfig, SpaHeatNotificationsConfig};
+use crate::spa_notifications::{
+    evaluate_spa_heat_notifications, SpaHeatNotificationEvent, SpaHeatNotificationInput,
+    SpaHeatNotificationState,
+};
 use chrono::{NaiveDate, NaiveDateTime};
 use pentair_protocol::responses::{HistoryData, TimeRangePoint};
 use pentair_protocol::semantic::{
@@ -196,10 +200,12 @@ impl HeatEstimatorStore {
 #[derive(Debug)]
 pub struct HeatEstimator {
     config: HeatingConfig,
+    spa_notification_config: SpaHeatNotificationsConfig,
     path: PathBuf,
     store: HeatEstimatorStore,
     pool_session: Option<ActiveHeatingSession>,
     spa_session: Option<ActiveHeatingSession>,
+    spa_notification_state: SpaHeatNotificationState,
     pool_active_since_unix_ms: Option<i64>,
     spa_active_since_unix_ms: Option<i64>,
     pool_last_active_observed: Option<bool>,
@@ -207,7 +213,16 @@ pub struct HeatEstimator {
 }
 
 impl HeatEstimator {
+    #[cfg(test)]
     pub fn load(config: HeatingConfig, path: PathBuf) -> Self {
+        Self::load_with_notifications(config, SpaHeatNotificationsConfig::default(), path)
+    }
+
+    pub fn load_with_notifications(
+        config: HeatingConfig,
+        spa_notification_config: SpaHeatNotificationsConfig,
+        path: PathBuf,
+    ) -> Self {
         let store = if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
@@ -227,10 +242,12 @@ impl HeatEstimator {
 
         Self {
             config,
+            spa_notification_config,
             path,
             store,
             pool_session: None,
             spa_session: None,
+            spa_notification_state: SpaHeatNotificationState::default(),
             pool_active_since_unix_ms: None,
             spa_active_since_unix_ms: None,
             pool_last_active_observed: None,
@@ -371,6 +388,42 @@ impl HeatEstimator {
                 spa.heat_estimate.as_ref(),
             );
         }
+    }
+
+    pub fn spa_heat_notification_events_for_system(
+        &mut self,
+        system: &PoolSystem,
+    ) -> Vec<SpaHeatNotificationEvent> {
+        if !self.config.enabled {
+            self.spa_notification_state = SpaHeatNotificationState::default();
+            return Vec::new();
+        }
+
+        let Some(spa) = system.spa.as_ref() else {
+            self.spa_notification_state = SpaHeatNotificationState::default();
+            return Vec::new();
+        };
+
+        let input = SpaHeatNotificationInput {
+            heating_active: spa.on && spa.heating != "off" && spa.heating != "unknown",
+            current_temp: spa.temperature,
+            target_temp: spa.setpoint,
+            minutes_remaining: spa
+                .heat_estimate
+                .as_ref()
+                .and_then(|estimate| estimate.available.then_some(estimate.minutes_remaining))
+                .flatten(),
+            trusted_session_start_temp_f: self.spa_session.as_ref().map(|session| session.start_temp_f),
+            trusted_session_current_temp_f: self.spa_session.as_ref().map(|session| session.latest_temp_f),
+            trusted_session_target_temp_f: self.spa_session.as_ref().map(|session| session.target_temp_f),
+            trusted_session_id: self.spa_session.as_ref().map(|session| session.started_at_unix_ms),
+        };
+
+        evaluate_spa_heat_notifications(
+            &self.spa_notification_config,
+            &input,
+            &mut self.spa_notification_state,
+        )
     }
 
     fn update_active_since_for_body(

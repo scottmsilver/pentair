@@ -4,10 +4,11 @@ mod config;
 mod devices;
 mod fcm;
 mod heat;
+mod spa_notifications;
 mod state;
 
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -22,7 +23,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("PENTAIR_CONFIG")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("pentair.toml"));
-    let config = config::Config::load(&config_path).unwrap_or_default();
+    let config = match config::Config::load(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("failed to parse config {:?}: {}, using defaults", config_path, e);
+            config::Config::default()
+        }
+    };
 
     info!("starting pentair-daemon, binding to {}", config.bind);
 
@@ -30,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = state::new_shared_state(
         config.associations.spa.clone(),
         config.heating.clone(),
+        config.notifications.spa_heat.clone(),
         heating_history_path,
     );
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
@@ -73,28 +81,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !local_addr.ip().is_loopback() {
         // Advertise via mDNS for app discovery.
-        let mdns = mdns_sd::ServiceDaemon::new().expect("failed to start mDNS");
-        let hostname = hostname::get()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let service_info = mdns_sd::ServiceInfo::new(
-            "_pentair._tcp.local.",
-            "Pentair Pool",
-            &format!("{}.local.", hostname),
-            "",
-            local_addr.port(),
-            None,
-        )
-        .expect("failed to create mDNS service")
-        .enable_addr_auto();
-        mdns.register(service_info)
-            .expect("failed to register mDNS service");
-        info!(
-            "mDNS: advertising _pentair._tcp on port {} as {}.local.",
-            local_addr.port(),
-            hostname
-        );
+        match mdns_sd::ServiceDaemon::new() {
+            Ok(mdns) => {
+                let hostname = hostname::get()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                match mdns_sd::ServiceInfo::new(
+                    "_pentair._tcp.local.",
+                    "Pentair Pool",
+                    &format!("{}.local.", hostname),
+                    "",
+                    local_addr.port(),
+                    None,
+                ) {
+                    Ok(service_info) => {
+                        let service_info = service_info.enable_addr_auto();
+                        if let Err(e) = mdns.register(service_info) {
+                            warn!("mDNS: failed to register service: {}, continuing without mDNS", e);
+                        } else {
+                            info!(
+                                "mDNS: advertising _pentair._tcp on port {} as {}.local.",
+                                local_addr.port(),
+                                hostname
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("mDNS: failed to create service info: {}, continuing without mDNS", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("mDNS: failed to start daemon: {}, continuing without mDNS", e);
+            }
+        }
     } else {
         info!(
             "mDNS: skipped because listener is loopback-only ({})",

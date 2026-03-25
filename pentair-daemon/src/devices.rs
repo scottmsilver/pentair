@@ -36,13 +36,24 @@ impl DeviceManager {
         }
     }
 
-    pub async fn register(&self, token: String) {
+    pub async fn register(&self, token: String) -> Result<(), &'static str> {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            warn!("rejected empty device token");
+            return Err("token must not be empty");
+        }
+        if trimmed.len() < 10 {
+            warn!("rejected too-short device token (len={})", trimmed.len());
+            return Err("token too short");
+        }
+        let token = trimmed.to_string();
         let mut store = self.store.write().await;
         if !store.tokens.contains(&token) {
             store.tokens.push(token);
             self.persist(&store);
             info!("registered new device token ({} total)", store.tokens.len());
         }
+        Ok(())
     }
 
     pub async fn remove(&self, token: &str) {

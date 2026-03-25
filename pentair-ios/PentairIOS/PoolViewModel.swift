@@ -36,9 +36,7 @@ final class PoolViewModel: ObservableObject {
         if let savedAddress = defaults.string(forKey: addressDefaultsKey),
            let savedURL = PoolAPI.normalizeBaseURL(savedAddress) {
             manualAddress = savedURL.absoluteString
-            activeBaseURL = savedURL
-            activeAddress = savedURL.absoluteString
-            api = PoolAPI(baseURL: savedURL)
+            setActiveBaseURL(savedURL)
             recordDiagnostic("startup", "Loaded saved daemon address \(savedURL.absoluteString)")
         }
 
@@ -411,6 +409,9 @@ final class PoolViewModel: ObservableObject {
         api = PoolAPI(baseURL: url)
         defaults.set(url.absoluteString, forKey: addressDefaultsKey)
         recordDiagnostic("startup", "Active daemon address set to \(url.absoluteString)")
+        Task {
+            await NotificationTokenManager.shared.ensureRegistered(activeBaseURL: url)
+        }
 
         if webSocketURL?.absoluteString != activeAddress {
             webSocketTask?.cancel(with: .goingAway, reason: nil)
