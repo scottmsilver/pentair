@@ -21,3 +21,7 @@ DerivedData/
 *.moved-aside
 pentair-ios/PentairIOS.xcodeproj/xcuserdata/
 pentair-ios/PentairIOS.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Firebase config (contains project-specific API keys)
+pentair-android/app/google-services.json
+pentair-ios/PentairIOS/GoogleService-Info.plist
