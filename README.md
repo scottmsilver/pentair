@@ -119,6 +119,26 @@ Related docs:
 - [docs/designs/heat-up-estimation.md](/home/ssilver/development/pentair/docs/designs/heat-up-estimation.md)
 - [docs/api-spec.md](/home/ssilver/development/pentair/docs/api-spec.md)
 
+## Firebase Setup (required for mobile apps and push notifications)
+
+After cloning, download Firebase config files from the [Firebase Console](https://console.firebase.google.com) → Project Settings → Your Apps:
+
+- **Android**: Download `google-services.json` → place at `pentair-android/app/google-services.json`
+- **iOS**: Download `GoogleService-Info.plist` → place at `pentair-ios/PentairIOS/GoogleService-Info.plist`
+
+These files are gitignored to keep API keys out of the public repo.
+
+For daemon push notifications (FCM), you also need a service account key:
+
+1. Firebase Console → Project Settings → Service Accounts → Generate New Private Key
+2. Save to `~/.pentair/firebase/<project-id>-pentair-daemon-fcm.json`
+3. Reference in your daemon config:
+   ```toml
+   [fcm]
+   project_id = "your-project-id"
+   service_account = "~/.pentair/firebase/your-project-id-pentair-daemon-fcm.json"
+   ```
+
 ## Notes
 
 - iOS and Android are intentionally thin. Server-side semantics are preferred when behavior needs to stay aligned across clients.
