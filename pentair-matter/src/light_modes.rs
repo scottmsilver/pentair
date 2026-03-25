@@ -29,10 +29,12 @@ impl LightModeMap {
         mode.and_then(|m| self.index_by_name(m))
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.modes.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.modes.is_empty()
     }

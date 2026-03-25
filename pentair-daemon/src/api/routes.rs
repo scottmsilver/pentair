@@ -66,6 +66,8 @@ pub fn router(
         .route("/api/raw/lights", post(set_light))
         .route("/api/raw/chlor/set", post(set_chlor))
         .route("/api/devices/register", post(register_device))
+        .route("/api/matter/qr", get(matter_qr))
+        .route("/api/matter/info", get(matter_info))
         .route("/api/cancel-delay", post(cancel_delay))
         .route("/api/refresh", post(refresh))
         .route("/api/ws", get(super::websocket::ws_handler))
@@ -581,4 +583,126 @@ async fn aux_on(State(state): State<AppState>, Path(id): Path<String>) -> Json<s
 
 async fn aux_off(State(state): State<AppState>, Path(id): Path<String>) -> Json<serde_json::Value> {
     set_semantic_circuit(&state, &id, false).await
+}
+
+// ── Matter commissioning ─────────────────────────────────────────────────
+
+/// Default Matter setup code (test credentials: discriminator 3840, passcode 20202021, VID 0xFFF1, PID 0x8001).
+/// Override at runtime with the MATTER_SETUP_CODE environment variable.
+const DEFAULT_MATTER_SETUP_CODE: &str = "MT:-24J0AFN00KA064IJ3P04A5D08CIH28QIB2OJKJ1K-XS0";
+
+/// Default manual pairing code for the test credentials.
+/// Override at runtime with the MATTER_MANUAL_CODE environment variable.
+const DEFAULT_MATTER_MANUAL_CODE: &str = "3497-0112-332";
+
+fn matter_setup_code() -> String {
+    std::env::var("MATTER_SETUP_CODE").unwrap_or_else(|_| DEFAULT_MATTER_SETUP_CODE.to_string())
+}
+
+fn matter_manual_code() -> String {
+    std::env::var("MATTER_MANUAL_CODE").unwrap_or_else(|_| DEFAULT_MATTER_MANUAL_CODE.to_string())
+}
+
+async fn matter_qr() -> impl IntoResponse {
+    let setup_code = matter_setup_code();
+    let qr = match qrcode::QrCode::new(setup_code.as_bytes()) {
+        Ok(q) => q,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                [(header::CONTENT_TYPE, "text/plain")],
+                format!("failed to generate QR code: {}", e).into_bytes(),
+            );
+        }
+    };
+    let image = qr.render::<image::Luma<u8>>().quiet_zone(true).build();
+    let mut png_bytes = std::io::Cursor::new(Vec::new());
+    if let Err(e) = image.write_to(&mut png_bytes, image::ImageFormat::Png) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(header::CONTENT_TYPE, "text/plain")],
+            format!("failed to encode PNG: {}", e).into_bytes(),
+        );
+    }
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png")],
+        png_bytes.into_inner(),
+    )
+}
+
+async fn matter_info() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "setup_code": matter_setup_code(),
+        "manual_code": matter_manual_code(),
+        "discriminator": 3840,
+        "passcode": 20202021,
+        "vendor_id": "0xFFF1",
+        "product_id": "0x8001",
+    }))
+}
+
+#[cfg(test)]
+mod matter_tests {
+    use super::*;
+
+    #[test]
+    fn default_setup_code_is_valid() {
+        // The default setup code should be a valid Matter QR string starting with "MT:"
+        assert!(DEFAULT_MATTER_SETUP_CODE.starts_with("MT:"));
+        assert!(DEFAULT_MATTER_SETUP_CODE.len() > 10);
+    }
+
+    #[test]
+    fn default_manual_code_is_valid() {
+        // Manual pairing codes are digit groups separated by hyphens
+        assert!(DEFAULT_MATTER_MANUAL_CODE.chars().all(|c| c.is_ascii_digit() || c == '-'));
+        assert_eq!(DEFAULT_MATTER_MANUAL_CODE.replace('-', "").len(), 11);
+    }
+
+    #[test]
+    fn qr_code_generates_valid_png() {
+        let qr = qrcode::QrCode::new(DEFAULT_MATTER_SETUP_CODE.as_bytes()).unwrap();
+        let image = qr.render::<image::Luma<u8>>().quiet_zone(true).build();
+        let mut png_bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png_bytes, image::ImageFormat::Png).unwrap();
+        let bytes = png_bytes.into_inner();
+
+        // Should be a non-trivial PNG (header + data)
+        assert!(bytes.len() > 100, "PNG too small: {} bytes", bytes.len());
+        // PNG magic bytes
+        assert_eq!(&bytes[..4], &[0x89, 0x50, 0x4E, 0x47], "not a valid PNG");
+    }
+
+    #[test]
+    fn qr_code_dimensions_are_reasonable() {
+        let qr = qrcode::QrCode::new(DEFAULT_MATTER_SETUP_CODE.as_bytes()).unwrap();
+        let image = qr.render::<image::Luma<u8>>().quiet_zone(true).build();
+        let (w, h) = image.dimensions();
+        // QR code should be square and between 100-1000 pixels
+        assert_eq!(w, h, "QR code should be square");
+        assert!(w >= 100, "QR code too small: {}x{}", w, h);
+        assert!(w <= 1000, "QR code too large: {}x{}", w, h);
+    }
+
+    #[tokio::test]
+    async fn matter_info_returns_expected_fields() {
+        let Json(info) = matter_info().await;
+        assert_eq!(info["setup_code"], DEFAULT_MATTER_SETUP_CODE);
+        assert_eq!(info["manual_code"], DEFAULT_MATTER_MANUAL_CODE);
+        assert_eq!(info["discriminator"], 3840);
+        assert_eq!(info["passcode"], 20202021);
+        assert!(info["vendor_id"].as_str().unwrap().starts_with("0x"));
+        assert!(info["product_id"].as_str().unwrap().starts_with("0x"));
+    }
+
+    #[tokio::test]
+    async fn matter_qr_returns_png_response() {
+        let response = matter_qr().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1_000_000).await.unwrap();
+        // Verify PNG magic bytes
+        assert_eq!(&body[..4], &[0x89, 0x50, 0x4E, 0x47]);
+    }
 }

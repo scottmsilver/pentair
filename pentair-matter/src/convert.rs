@@ -21,6 +21,7 @@ pub fn pentair_heat_mode_to_matter(mode: &str) -> u8 {
 
 /// Map Matter SystemMode to Pentair heat_mode action.
 /// Returns None for unsupported modes (Cool, Auto).
+#[allow(dead_code)]
 pub fn matter_to_pentair_heat_mode(system_mode: u8) -> Option<&'static str> {
     match system_mode {
         0 => Some("off"),

@@ -3,7 +3,9 @@ use std::collections::HashMap;
 
 /// Subset of the daemon's GET /api/pool response — only fields needed for Matter endpoints.
 /// Pool, spa, and lights are Option because they may not be configured on all controllers.
+/// Fields are pub for deserialization and test use; some are not read by the binary itself.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct PoolSystem {
     pub pool: Option<Body>,
     pub spa: Option<SpaBody>,
@@ -12,6 +14,7 @@ pub struct PoolSystem {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Body {
     pub on: bool,
     #[serde(default)]
@@ -23,6 +26,7 @@ pub struct Body {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct SpaBody {
     pub on: bool,
     #[serde(default)]
@@ -43,6 +47,7 @@ pub struct Lights {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct System {
     pub pool_spa_shared_pump: bool,
 }

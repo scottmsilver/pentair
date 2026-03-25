@@ -1,6 +1,5 @@
 //! Integration tests for pentair-matter using a mock daemon HTTP server.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
