@@ -4,6 +4,7 @@ members = [
     "pentair-client",
     "pentair-daemon",
     "pentair-cli",
+    "pentair-matter",
 ]
 resolver = "2"
 

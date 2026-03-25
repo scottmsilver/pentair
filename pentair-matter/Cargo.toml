@@ -1,0 +1,32 @@
+[package]
+name = "pentair-matter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+clap = { version = "4", features = ["derive", "env"] }
+toml = "0.8"
+dirs = "5"
+rs-matter = { git = "https://github.com/project-chip/rs-matter", features = ["os", "async-io"] }
+embassy-futures = "0.1"
+embassy-sync = "0.7"
+embassy-time = { version = "0.5", features = ["std"] }
+embassy-time-queue-utils = { version = "0.3", features = ["generic-queue-64"] }
+async-io = "2"
+futures-lite = "2"
+socket2 = "0.5"
+rand = { version = "0.8", features = ["std", "std_rng"] }
+nix = { version = "0.27", features = ["net"] }
+log = "0.4"
+
+[dev-dependencies]
+axum = "0.8"

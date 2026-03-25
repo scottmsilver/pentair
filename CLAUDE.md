@@ -20,13 +20,14 @@ pentair-protocol/    Wire protocol: types, encode, decode, semantic model (no IO
 pentair-client/      Async TCP/UDP client (tokio)
 pentair-daemon/      Long-running service: REST API + WebSocket + web UI + state cache
 pentair-cli/         Command-line tool (talks to daemon or direct to adapter)
+pentair-matter/      Matter bridge sidecar — exposes pool to Google Home via rs-matter
 ```
 
 ## Building & Testing
 
 ```bash
 cargo build --workspace              # Build everything
-cargo test --workspace               # Run unit tests (80 protocol + 2 client)
+cargo test --workspace               # Run all unit + integration tests
 ```
 
 ### Live hardware tests (require adapter at PENTAIR_HOST)
@@ -49,6 +50,9 @@ cargo run -p pentair-daemon
 
 # CLI daemon mode (default, talks to daemon HTTP API)
 cargo run -p pentair-cli -- status
+
+# Matter bridge sidecar (requires daemon running, exposes to Google Home)
+cargo run -p pentair-matter -- --daemon-url http://localhost:8080
 ```
 
 ## Semantic API
@@ -65,6 +69,36 @@ Smart behaviors: jets auto-enables spa, spa-off disables jets, light mode tracke
 
 Pool and spa bodies include `active: bool` — true when the circuit is on AND the pump is running with RPM > 0. Use `on` for what the user commanded, `active` for whether water is actually flowing.
 
+## Matter Bridge
+
+`pentair-matter` is a sidecar that exposes the pool to Google Home (and any Matter controller) via the Matter protocol. It talks to the daemon's REST API and WebSocket — zero daemon changes needed.
+
+**Endpoints:**
+- Endpoint 2: Spa — Thermostat (temperature, setpoint, heat mode) + OnOff
+- Endpoint 3: Jets — OnOff (auto-enables spa via daemon smart behavior)
+- Endpoint 4: Lights — OnOff + ModeSelect (12 IntelliBrite modes)
+
+**Architecture:** rs-matter runs on a dedicated OS thread (embassy async). Tokio handles daemon HTTP/WS. Communication via `std::sync::mpsc` channels and `Arc<Mutex<MatterState>>`.
+
+**Testing with chip-tool:**
+```bash
+# Requires: sudo snap install chip-tool && sudo snap connect chip-tool:avahi-observe
+# Requires: daemon running on localhost:8080
+
+# Automated e2e test (starts bridge, commissions, tests all endpoints):
+./pentair-matter/tests/chip_tool_e2e.sh
+
+# Manual:
+chip-tool pairing onnetwork 1 20202021
+chip-tool thermostat read local-temperature 1 2
+chip-tool thermostat write occupied-heating-setpoint 4000 1 2
+chip-tool onoff on 1 3                              # jets
+chip-tool modeselect change-to-mode 3 1 4           # caribbean
+chip-tool modeselect read supported-modes 1 4
+```
+
+**Commissioning:** Pairing code `3497-0112-332` (test defaults: discriminator 3840, passcode 20202021). Fabric persisted to `~/.pentair/matter-fabrics.bin`.
+
 ## Key Files
 
 - `docs/protocol-reference.md` — byte-level protocol documentation
@@ -72,3 +106,7 @@ Pool and spa bodies include `active: bool` — true when the circuit is on AND t
 - `pentair-protocol/src/semantic.rs` — topology discovery and semantic model
 - `pentair-daemon/static/index.html` — embedded web UI
 - `pentair-client/tests/live_write.rs` — stateful hardware tests with save/restore
+- `pentair-matter/src/matter_bridge.rs` — Matter bridge topology + OnOff hooks + mDNS
+- `pentair-matter/src/thermostat_handler.rs` — Thermostat cluster (spa temp/setpoint/mode)
+- `pentair-matter/src/mode_select_handler.rs` — ModeSelect cluster (IntelliBrite lights)
+- `pentair-matter/tests/chip_tool_e2e.sh` — end-to-end test with chip-tool
