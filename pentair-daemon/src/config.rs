@@ -1,3 +1,4 @@
+use crate::scenes::SceneConfig;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -28,6 +29,22 @@ pub struct Config {
 
     #[serde(default)]
     pub notifications: NotificationsConfig,
+
+    /// Scene definitions for multi-command orchestration.
+    ///
+    /// Example:
+    /// ```toml
+    /// [[scenes]]
+    /// name = "pool-party"
+    /// label = "Pool Party"
+    /// commands = [
+    ///   { target = "spa", action = "on" },
+    ///   { target = "jets", action = "on" },
+    ///   { target = "lights", action = "mode", value = "caribbean" },
+    /// ]
+    /// ```
+    #[serde(default)]
+    pub scenes: Vec<SceneConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -172,6 +189,7 @@ impl Default for Config {
             fcm: Default::default(),
             heating: Default::default(),
             notifications: Default::default(),
+            scenes: Default::default(),
         }
     }
 }
@@ -293,5 +311,44 @@ mod config_tests {
         assert!(!config.notifications.spa_heat.almost_ready);
         assert!(config.notifications.spa_heat.at_temp);
         assert_eq!(config.notifications.spa_heat.minimum_delta_f, 6.5);
+    }
+
+    #[test]
+    fn config_without_scenes_has_empty_scenes() {
+        let config: Config = toml::from_str("").expect("default config should deserialize");
+        assert!(config.scenes.is_empty());
+    }
+
+    #[test]
+    fn config_with_scenes_parses_correctly() {
+        let config: Config = toml::from_str(
+            r#"
+            [[scenes]]
+            name = "pool-party"
+            label = "Pool Party"
+            commands = [
+                { target = "spa", action = "on" },
+                { target = "jets", action = "on" },
+                { target = "lights", action = "mode", value = "caribbean" },
+            ]
+
+            [[scenes]]
+            name = "all-off"
+            label = "All Off"
+            commands = [
+                { target = "spa", action = "off" },
+                { target = "lights", action = "off" },
+            ]
+            "#,
+        )
+        .expect("scenes config should deserialize");
+
+        assert_eq!(config.scenes.len(), 2);
+        assert_eq!(config.scenes[0].name, "pool-party");
+        assert_eq!(config.scenes[0].label, "Pool Party");
+        assert_eq!(config.scenes[0].commands.len(), 3);
+        assert_eq!(config.scenes[0].commands[2].value.as_deref(), Some("caribbean"));
+        assert_eq!(config.scenes[1].name, "all-off");
+        assert_eq!(config.scenes[1].commands.len(), 2);
     }
 }

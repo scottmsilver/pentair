@@ -5,6 +5,7 @@ mod devices;
 mod fcm;
 mod heat;
 mod scheduled_heat;
+mod scenes;
 mod spa_notifications;
 mod state;
 
@@ -89,8 +90,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await;
 
+    // Resolve scenes (use configured scenes, or defaults if none configured)
+    let scene_store = scenes::SceneStore::new(scenes::resolve_scenes(&config.scenes));
+    info!("loaded {} scene(s)", scene_store.list().len());
+
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat);
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);

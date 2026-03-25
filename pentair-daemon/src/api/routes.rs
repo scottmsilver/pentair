@@ -1,5 +1,6 @@
 use crate::adapter::{AdapterCommand, PushEvent};
 use crate::scheduled_heat::{self, SharedScheduledHeat};
+use crate::scenes::{self, SceneStore};
 use crate::state::SharedState;
 use axum::{
     extract::Path,
@@ -21,6 +22,7 @@ pub struct AppState {
     pub push_tx: broadcast::Sender<PushEvent>,
     pub devices: crate::devices::DeviceManager,
     pub scheduled_heat: SharedScheduledHeat,
+    pub scenes: SceneStore,
 }
 
 pub fn router(
@@ -29,6 +31,7 @@ pub fn router(
     push_tx: broadcast::Sender<PushEvent>,
     devices: crate::devices::DeviceManager,
     scheduled_heat: SharedScheduledHeat,
+    scenes: SceneStore,
 ) -> Router {
     let state = AppState {
         shared,
@@ -36,6 +39,7 @@ pub fn router(
         push_tx,
         devices,
         scheduled_heat,
+        scenes,
     };
 
     Router::new()
@@ -57,6 +61,9 @@ pub fn router(
         .route("/api/lights/mode", post(lights_mode))
         .route("/api/auxiliary/{id}/on", post(aux_on))
         .route("/api/auxiliary/{id}/off", post(aux_off))
+        // ── Scenes API ──────────────────────────────────────────────
+        .route("/api/scenes", get(list_scenes))
+        .route("/api/scenes/{name}", post(trigger_scene))
         // ── Raw API (for debugging / advanced use) ──────────────────
         .route("/api/raw/status", get(get_status))
         .route("/api/raw/config", get(get_config))
@@ -538,6 +545,29 @@ async fn spa_heat(
     apply_heat(&state, "spa", body).await
 }
 
+/// Map a light mode name to its protocol command code.
+fn light_mode_to_command(mode: &str) -> Option<i32> {
+    match mode {
+        "off" => Some(0),
+        "on" => Some(1),
+        "set" => Some(2),
+        "sync" => Some(3),
+        "swim" => Some(4),
+        "party" => Some(5),
+        "romantic" => Some(6),
+        "caribbean" => Some(7),
+        "american" => Some(8),
+        "sunset" => Some(9),
+        "royal" => Some(10),
+        "blue" => Some(13),
+        "green" => Some(14),
+        "red" => Some(15),
+        "white" => Some(16),
+        "purple" => Some(17),
+        _ => None,
+    }
+}
+
 #[derive(Deserialize)]
 struct LightModeRequest {
     mode: String,
@@ -547,28 +577,10 @@ async fn lights_mode(
     State(state): State<AppState>,
     Json(body): Json<LightModeRequest>,
 ) -> Json<serde_json::Value> {
-    let command = match body.mode.as_str() {
-        "off" => 0,
-        "on" => 1,
-        "set" => 2,
-        "sync" => 3,
-        "swim" => 4,
-        "party" => 5,
-        "romantic" => 6,
-        "caribbean" => 7,
-        "american" => 8,
-        "sunset" => 9,
-        "royal" => 10,
-        "blue" => 13,
-        "green" => 14,
-        "red" => 15,
-        "white" => 16,
-        "purple" => 17,
-        _ => {
-            return Json(
-                serde_json::json!({"ok": false, "error": format!("unknown light mode: {}", body.mode)}),
-            )
-        }
+    let Some(command) = light_mode_to_command(&body.mode) else {
+        return Json(
+            serde_json::json!({"ok": false, "error": format!("unknown light mode: {}", body.mode)}),
+        );
     };
     let (tx, rx) = tokio::sync::oneshot::channel();
     let _ = state
@@ -756,4 +768,146 @@ async fn get_spa_heat_at(State(state): State<AppState>) -> Json<serde_json::Valu
 async fn delete_spa_heat_at(State(state): State<AppState>) -> Json<serde_json::Value> {
     let had = scheduled_heat::cancel_schedule(&state.scheduled_heat).await;
     Json(serde_json::json!({"ok": true, "had_schedule": had}))
+}
+
+// ── Scene handlers ──────────────────────────────────────────────────────
+
+async fn list_scenes(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::to_value(state.scenes.list()).unwrap())
+}
+
+async fn trigger_scene(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let Some(scene) = state.scenes.find(&name) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"ok": false, "error": format!("unknown scene: {}", name)})),
+        );
+    };
+
+    let scene = scene.clone();
+    // Serialize scene execution to prevent command interleaving against hardware.
+    let _guard = state.scenes.exec_lock.lock().await;
+    let result = scenes::execute_scene(&scene, |target, action, value| {
+        let state = state.clone();
+        async move { execute_scene_command(&state, &target, &action, value.as_deref()).await }
+    })
+    .await;
+
+    // Partial failures still return 200 with per-command results in the body.
+    (StatusCode::OK, Json(serde_json::to_value(&result).unwrap()))
+}
+
+/// Execute a single scene command by dispatching through the same code paths
+/// as the REST API handlers. This ensures scenes behave identically to manual
+/// API calls (e.g., jets auto-enables spa, spa-off disables jets, etc.).
+async fn execute_scene_command(
+    state: &AppState,
+    target: &str,
+    action: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    match (target, action) {
+        ("spa", "on") => {
+            let result = set_semantic_circuit(state, "spa", true).await;
+            json_to_result(&result.0)
+        }
+        ("spa", "off") => {
+            // Match spa_off behavior: turn off jets first, then spa
+            let _ = set_semantic_circuit(state, "jets", false).await;
+            let result = set_semantic_circuit(state, "spa", false).await;
+            json_to_result(&result.0)
+        }
+        ("pool", "on") => {
+            let result = set_semantic_circuit(state, "pool", true).await;
+            json_to_result(&result.0)
+        }
+        ("pool", "off") => {
+            let result = set_semantic_circuit(state, "pool", false).await;
+            json_to_result(&result.0)
+        }
+        ("jets", "on") => {
+            // Match jets_on behavior: ensure spa is on first
+            let spa_on = {
+                let s = state.shared.read().await;
+                s.pool_system()
+                    .and_then(|p| p.spa.map(|s| s.on))
+                    .unwrap_or(false)
+            };
+            if !spa_on {
+                let result = set_semantic_circuit(state, "spa", true).await;
+                if let Err(e) = json_to_result(&result.0) {
+                    return Err(e);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            let result = set_semantic_circuit(state, "jets", true).await;
+            json_to_result(&result.0)
+        }
+        ("jets", "off") => {
+            let result = set_semantic_circuit(state, "jets", false).await;
+            json_to_result(&result.0)
+        }
+        ("lights", "on") => {
+            let result = set_semantic_circuit(state, "lights", true).await;
+            json_to_result(&result.0)
+        }
+        ("lights", "off") => {
+            let result = set_semantic_circuit(state, "lights", false).await;
+            json_to_result(&result.0)
+        }
+        ("spa", "heat") | ("pool", "heat") => {
+            let setpoint = value
+                .ok_or_else(|| format!("{} heat requires a value (setpoint)", target))?
+                .parse::<i32>()
+                .map_err(|e| format!("invalid setpoint: {}", e))?;
+            let body = HeatRequest {
+                setpoint: Some(setpoint),
+                mode: None,
+            };
+            let (_, Json(resp)) = apply_heat(state, target, body).await;
+            json_to_result(&resp)
+        }
+        ("lights", "mode") => {
+            let mode = value.ok_or_else(|| "lights mode requires a value".to_string())?;
+            let command = light_mode_to_command(mode)
+                .ok_or_else(|| format!("unknown light mode: {}", mode))?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let _ = state
+                .cmd_tx
+                .send(AdapterCommand::SetLightCommand { command, reply: tx })
+                .await;
+            match rx.await {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err("adapter disconnected".to_string()),
+            }
+        }
+        // Auxiliary circuits by name
+        (id, "on") => {
+            let result = set_semantic_circuit(state, id, true).await;
+            json_to_result(&result.0)
+        }
+        (id, "off") => {
+            let result = set_semantic_circuit(state, id, false).await;
+            json_to_result(&result.0)
+        }
+        _ => Err(format!("unsupported command: {} {}", target, action)),
+    }
+}
+
+/// Extract Ok/Err from the standard JSON response format `{"ok": bool, "error": "..."}`.
+fn json_to_result(json: &serde_json::Value) -> Result<(), String> {
+    if json.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Ok(())
+    } else {
+        let error = json
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error")
+            .to_string();
+        Err(error)
+    }
 }
