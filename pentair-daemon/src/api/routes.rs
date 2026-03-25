@@ -1,4 +1,5 @@
 use crate::adapter::{AdapterCommand, PushEvent};
+use crate::scheduled_heat::{self, SharedScheduledHeat};
 use crate::state::SharedState;
 use axum::{
     extract::Path,
@@ -19,6 +20,7 @@ pub struct AppState {
     pub cmd_tx: mpsc::Sender<AdapterCommand>,
     pub push_tx: broadcast::Sender<PushEvent>,
     pub devices: crate::devices::DeviceManager,
+    pub scheduled_heat: SharedScheduledHeat,
 }
 
 pub fn router(
@@ -26,12 +28,14 @@ pub fn router(
     cmd_tx: mpsc::Sender<AdapterCommand>,
     push_tx: broadcast::Sender<PushEvent>,
     devices: crate::devices::DeviceManager,
+    scheduled_heat: SharedScheduledHeat,
 ) -> Router {
     let state = AppState {
         shared,
         cmd_tx,
         push_tx,
         devices,
+        scheduled_heat,
     };
 
     Router::new()
@@ -45,6 +49,7 @@ pub fn router(
         .route("/api/spa/on", post(spa_on))
         .route("/api/spa/off", post(spa_off))
         .route("/api/spa/heat", post(spa_heat))
+        .route("/api/spa/heat-at", post(spa_heat_at).get(get_spa_heat_at).delete(delete_spa_heat_at))
         .route("/api/spa/jets/on", post(jets_on))
         .route("/api/spa/jets/off", post(jets_off))
         .route("/api/lights/on", post(lights_on))
@@ -581,4 +586,50 @@ async fn aux_on(State(state): State<AppState>, Path(id): Path<String>) -> Json<s
 
 async fn aux_off(State(state): State<AppState>, Path(id): Path<String>) -> Json<serde_json::Value> {
     set_semantic_circuit(&state, &id, false).await
+}
+
+// ── Scheduled heating (heat-at) ─────────────────────────────────────────
+
+async fn spa_heat_at(
+    State(state): State<AppState>,
+    Json(body): Json<scheduled_heat::HeatAtRequest>,
+) -> impl IntoResponse {
+    // Read current spa state from the heat estimator
+    let (current_temp, learned_rate, configured_rate) = {
+        let s = state.shared.read().await;
+        let air_temp_f = s.status.as_ref().map(|st| st.air_temp as f64);
+        (
+            s.heat.spa_last_reliable_temp(),
+            s.heat.spa_learned_rate_f_per_hour(air_temp_f),
+            s.heat.spa_configured_rate_f_per_hour(),
+        )
+    };
+
+    match scheduled_heat::create_schedule(
+        &state.scheduled_heat,
+        &body,
+        current_temp,
+        learned_rate,
+        configured_rate,
+        state.shared.clone(),
+        state.cmd_tx.clone(),
+    )
+    .await
+    {
+        Ok(resp) => (StatusCode::OK, Json(serde_json::to_value(&resp).unwrap())),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": e})),
+        ),
+    }
+}
+
+async fn get_spa_heat_at(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let resp = scheduled_heat::get_schedule(&state.scheduled_heat).await;
+    Json(serde_json::to_value(&resp).unwrap())
+}
+
+async fn delete_spa_heat_at(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let had = scheduled_heat::cancel_schedule(&state.scheduled_heat).await;
+    Json(serde_json::json!({"ok": true, "had_schedule": had}))
 }

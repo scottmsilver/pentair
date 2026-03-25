@@ -390,6 +390,24 @@ impl HeatEstimator {
         }
     }
 
+    /// Get the best available heating rate for the spa in F/hour.
+    /// Used by the timed heating scheduler to estimate how long heating will take.
+    /// Pass current air temperature to weight recent sessions by ambient similarity.
+    pub fn spa_learned_rate_f_per_hour(&self, current_air_temp_f: Option<f64>) -> Option<f64> {
+        self.learned_rate_f_per_hour(HeatingBodyKind::Spa, current_air_temp_f)
+    }
+
+    /// Get the configured (physics-based) heating rate for the spa in F/hour.
+    pub fn spa_configured_rate_f_per_hour(&self) -> Option<f64> {
+        self.configured_rate_f_per_hour(HeatingBodyKind::Spa)
+    }
+
+    /// Get the last reliable spa temperature observation.
+    pub fn spa_last_reliable_temp(&self) -> Option<i32> {
+        self.last_reliable_temperature(HeatingBodyKind::Spa)
+            .map(|obs| obs.temperature)
+    }
+
     pub fn spa_heat_notification_events_for_system(
         &mut self,
         system: &PoolSystem,
