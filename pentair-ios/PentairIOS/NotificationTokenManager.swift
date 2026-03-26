@@ -34,6 +34,10 @@ actor NotificationTokenManager {
         self.registerer = registerer
     }
 
+    var currentToken: String? {
+        defaults.string(forKey: tokenKey)
+    }
+
     func saveToken(_ token: String, activeBaseURL: URL?) async {
         defaults.setString(token, forKey: tokenKey)
         await ensureRegistered(activeBaseURL: activeBaseURL)
