@@ -9,7 +9,7 @@
 //! like "spa", "pool", "jets", "lights".
 
 use crate::responses::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 // ─── Public model (what clients see) ────────────────────────────────────
@@ -67,6 +67,59 @@ pub struct HeatEstimateDisplay {
     pub target_temperature: Option<i32>,
 }
 
+/// UI-oriented server display contract for spa heat progress.
+///
+/// Consolidates all spa heating progress state so clients can drive
+/// notifications, Live Activities, and progress UI without local tracking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaHeatProgress {
+    /// Whether the spa is actively heating (on, heat_mode != "off", heating != "off").
+    pub active: bool,
+    /// "started" = heating just began (no ETA yet), "tracking" = ETA available,
+    /// "reached" = current_temp >= target, "off" = not heating.
+    pub phase: String,
+    /// Temperature when the current heating session began (from the HeatEstimator's
+    /// trusted session). None when no active session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_temp_f: Option<i32>,
+    /// Current water temperature.
+    pub current_temp_f: i32,
+    /// Heat setpoint.
+    pub target_temp_f: i32,
+    /// 0-100 progress from start to target.
+    pub progress_pct: u8,
+    /// Minutes remaining from the heat estimate, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minutes_remaining: Option<u32>,
+    /// Identifier for the current heating session (unix ms of session start).
+    /// Clients can use this to detect session changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Milestone label for the current heating state, if any.
+    /// Values: "heating_started", "halfway", "almost_ready", "at_temp".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+}
+
+impl Default for SpaHeatProgress {
+    /// Default is the "not heating" state.
+    /// `current_temp_f` and `target_temp_f` default to 0, meaning "not available".
+    /// Clients should display "--" when these are 0 (the widget already does this).
+    fn default() -> Self {
+        Self {
+            active: false,
+            phase: "off".to_string(),
+            start_temp_f: None,
+            current_temp_f: 0,
+            target_temp_f: 0,
+            progress_pct: 0,
+            minutes_remaining: None,
+            session_id: None,
+            milestone: None,
+        }
+    }
+}
+
 /// Pool body — on/off, temperature, heating.
 #[derive(Debug, Clone, Serialize)]
 pub struct BodyState {
@@ -115,6 +168,8 @@ pub struct SpaState {
     pub heat_estimate: Option<HeatEstimate>,
     pub temperature_display: TemperatureDisplay,
     pub heat_estimate_display: HeatEstimateDisplay,
+    /// Server-computed spa heat progress display contract.
+    pub spa_heat_progress: SpaHeatProgress,
     /// Spa accessories (jets, blower, etc.) keyed by slug ID.
     pub accessories: HashMap<String, bool>,
 }
@@ -407,6 +462,11 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
                 available_in_seconds: None,
                 minutes_remaining: None,
                 target_temperature: None,
+            },
+            spa_heat_progress: SpaHeatProgress {
+                current_temp_f: body.current_temp,
+                target_temp_f: body.set_point,
+                ..SpaHeatProgress::default()
             },
             accessories,
         }

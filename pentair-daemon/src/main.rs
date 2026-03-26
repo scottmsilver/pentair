@@ -1,5 +1,6 @@
 mod adapter;
 mod api;
+mod apns;
 mod config;
 mod devices;
 mod fcm;
@@ -58,6 +59,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .map(std::sync::Arc::new);
 
+    // Create APNs sender (None if not configured)
+    let apns_sender = apns::ApnsSender::new(&config.apns, devices.clone())
+        .map(std::sync::Arc::new);
+
     // Start adapter task
     let adapter_state = state.clone();
     let adapter_host = config.adapter_host.clone();
@@ -69,6 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd_rx,
             push_tx_adapter,
             fcm_sender,
+            apns_sender,
         )
         .await;
     });

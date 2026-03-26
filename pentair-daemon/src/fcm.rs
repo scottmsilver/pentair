@@ -74,10 +74,31 @@ struct FcmMessageBody {
     notification: FcmNotification,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct FcmNotification {
     title: String,
     body: String,
+}
+
+// ─── FCM data+notification message (for Live Updates) ───────────────────
+
+#[derive(Debug, Serialize)]
+struct FcmDataMessage {
+    message: FcmDataMessageBody,
+}
+
+#[derive(Debug, Serialize)]
+struct FcmAndroidConfig {
+    priority: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FcmDataMessageBody {
+    token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notification: Option<FcmNotification>,
+    android: FcmAndroidConfig,
+    data: std::collections::HashMap<String, String>,
 }
 
 // ─── OAuth2 token response ──────────────────────────────────────────────
@@ -255,38 +276,177 @@ impl FcmSender {
                 .send()
                 .await;
 
-            match result {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    match status {
-                        200..=299 => {}
-                        404 | 410 => {
-                            warn!("FCM: token invalid ({}), removing", status);
-                            self.devices.remove(token).await;
-                        }
-                        401 => {
-                            let body = resp.text().await.unwrap_or_default();
-                            error!("FCM: auth error (401): {}", body);
-                            // Clear cached token so next send fetches a fresh one
-                            let mut cache = self.token_cache.write().await;
-                            cache.token = None;
-                            cache.expires_at = 0;
-                        }
-                        429 => {
-                            warn!("FCM: rate limited (429)");
-                        }
-                        500..=599 => {
-                            error!("FCM: server error ({})", status);
-                        }
-                        _ => {
-                            let body = resp.text().await.unwrap_or_default();
-                            warn!("FCM: unexpected status {}: {}", status, body);
-                        }
+            self.handle_send_result(result, token).await;
+        }
+    }
+
+    /// Send a data+notification message to all registered devices.
+    /// If `notification` is Some, a visible notification is shown (milestone alerts).
+    /// If None, it's a silent data-only message (progress updates).
+    pub async fn send_data_notification(
+        &self,
+        title: Option<&str>,
+        body: Option<&str>,
+        data: std::collections::HashMap<String, String>,
+    ) {
+        let tokens = self.devices.tokens().await;
+        if tokens.is_empty() {
+            return;
+        }
+
+        let access_token = match self.get_access_token().await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("FCM: failed to get access token: {}", e);
+                return;
+            }
+        };
+
+        let url = format!(
+            "https://fcm.googleapis.com/v1/projects/{}/messages:send",
+            self.project_id
+        );
+
+        let notification = match (title, body) {
+            (Some(t), Some(b)) => Some(FcmNotification {
+                title: t.to_string(),
+                body: b.to_string(),
+            }),
+            _ => None,
+        };
+
+        let label = title.unwrap_or("data-only");
+        info!(
+            "FCM: sending data message '{}' to {} device(s)",
+            label,
+            tokens.len()
+        );
+
+        for token in &tokens {
+            let message = FcmDataMessage {
+                message: FcmDataMessageBody {
+                    token: token.clone(),
+                    notification: notification.clone(),
+                    android: FcmAndroidConfig {
+                        priority: "high".to_string(),
+                    },
+                    data: data.clone(),
+                },
+            };
+
+            let result = self
+                .http
+                .post(&url)
+                .bearer_auth(&access_token)
+                .json(&message)
+                .send()
+                .await;
+
+            self.handle_send_result(result, token).await;
+        }
+    }
+
+    /// Send a data+notification message to Android devices only.
+    /// Used for data-only continuous updates where iOS uses APNs live activities.
+    pub async fn send_data_notification_android(
+        &self,
+        title: Option<&str>,
+        body: Option<&str>,
+        data: std::collections::HashMap<String, String>,
+    ) {
+        let tokens = self.devices.android_tokens().await;
+        if tokens.is_empty() {
+            return;
+        }
+
+        let access_token = match self.get_access_token().await {
+            Ok(t) => t,
+            Err(e) => {
+                error!("FCM: failed to get access token: {}", e);
+                return;
+            }
+        };
+
+        let url = format!(
+            "https://fcm.googleapis.com/v1/projects/{}/messages:send",
+            self.project_id
+        );
+
+        let notification = match (title, body) {
+            (Some(t), Some(b)) => Some(FcmNotification {
+                title: t.to_string(),
+                body: b.to_string(),
+            }),
+            _ => None,
+        };
+
+        let label = title.unwrap_or("data-only");
+        info!(
+            "FCM: sending data message '{}' to {} android device(s)",
+            label,
+            tokens.len()
+        );
+
+        for token in &tokens {
+            let message = FcmDataMessage {
+                message: FcmDataMessageBody {
+                    token: token.clone(),
+                    notification: notification.clone(),
+                    android: FcmAndroidConfig {
+                        priority: "high".to_string(),
+                    },
+                    data: data.clone(),
+                },
+            };
+
+            let result = self
+                .http
+                .post(&url)
+                .bearer_auth(&access_token)
+                .json(&message)
+                .send()
+                .await;
+
+            self.handle_send_result(result, token).await;
+        }
+    }
+
+    async fn handle_send_result(
+        &self,
+        result: Result<reqwest::Response, reqwest::Error>,
+        token: &str,
+    ) {
+        match result {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                match status {
+                    200..=299 => {}
+                    404 | 410 => {
+                        warn!("FCM: token invalid ({}), removing", status);
+                        self.devices.remove(token).await;
+                    }
+                    401 => {
+                        let body = resp.text().await.unwrap_or_default();
+                        error!("FCM: auth error (401): {}", body);
+                        // Clear cached token so next send fetches a fresh one
+                        let mut cache = self.token_cache.write().await;
+                        cache.token = None;
+                        cache.expires_at = 0;
+                    }
+                    429 => {
+                        warn!("FCM: rate limited (429)");
+                    }
+                    500..=599 => {
+                        error!("FCM: server error ({})", status);
+                    }
+                    _ => {
+                        let body = resp.text().await.unwrap_or_default();
+                        warn!("FCM: unexpected status {}: {}", status, body);
                     }
                 }
-                Err(e) => {
-                    error!("FCM: request failed: {}", e);
-                }
+            }
+            Err(e) => {
+                error!("FCM: request failed: {}", e);
             }
         }
     }

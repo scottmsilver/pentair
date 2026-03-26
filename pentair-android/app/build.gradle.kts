@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.ssilver.pentair"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.ssilver.pentair"
@@ -66,6 +66,9 @@ dependencies {
 
     // Core
     implementation("androidx.core:core-ktx:1.15.0")
+
+    // Glance (AppWidget)
+    implementation("androidx.glance:glance-appwidget:1.1.1")
 
     // Firebase
     implementation(platform("com.google.firebase:firebase-bom:33.7.0"))

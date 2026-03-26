@@ -1,3 +1,4 @@
+import ActivityKit
 import Foundation
 import OSLog
 
@@ -31,6 +32,9 @@ final class PoolViewModel: ObservableObject {
     private var bannerDismissTask: Task<Void, Never>?
     private var discoveryHintTask: Task<Void, Never>?
     private var pendingMutations: [PendingPoolMutation] = []
+    private var currentSpaHeatActivity: Activity<SpaHeatAttributes>?
+    private var pushTokenObservationTask: Task<Void, Never>?
+    private var wasProgressActive = false
 
     init() {
         if let savedAddress = defaults.string(forKey: addressDefaultsKey),
@@ -513,6 +517,169 @@ final class PoolViewModel: ObservableObject {
         recordDiagnostic("websocket", "Websocket failed: \(error.localizedDescription). Reconnecting in \(Int(delay))s.")
     }
 
+    // MARK: - Live Activity lifecycle
+
+    private func evaluateSpaHeatActivity(for system: PoolSystem) {
+        guard let spa = system.spa else {
+            endSpaHeatActivityIfNeeded(reason: "no spa")
+            wasProgressActive = false
+            return
+        }
+
+        let progress = spa.spaHeatProgress
+
+        if progress.active && !wasProgressActive {
+            startSpaHeatActivity(progress: progress)
+        } else if progress.active && wasProgressActive {
+            updateSpaHeatActivity(progress: progress)
+        } else if !progress.active && wasProgressActive {
+            endSpaHeatActivityIfNeeded(reason: "cancelled")
+        }
+
+        wasProgressActive = progress.active
+    }
+
+    private func startSpaHeatActivity(progress: SpaHeatProgress) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+            recordDiagnostic("live-activity", "Live Activities not enabled, skipping")
+            return
+        }
+
+        // Don't start a duplicate
+        if currentSpaHeatActivity != nil {
+            updateSpaHeatActivity(progress: progress)
+            return
+        }
+
+        let attributes = SpaHeatAttributes(spaName: "Spa")
+        let contentState = buildContentState(from: progress)
+        let content = ActivityContent(state: contentState, staleDate: Date().addingTimeInterval(120))
+
+        do {
+            let activity = try Activity.request(
+                attributes: attributes,
+                content: content,
+                pushType: .token
+            )
+            currentSpaHeatActivity = activity
+            recordDiagnostic("live-activity", "Started spa heat Live Activity (id: \(activity.id))")
+            observePushTokenUpdates(for: activity)
+        } catch {
+            recordDiagnostic("live-activity", "Failed to start Live Activity: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateSpaHeatActivity(progress: SpaHeatProgress) {
+        guard let activity = currentSpaHeatActivity else {
+            return
+        }
+
+        // Preserve the original start temperature from when the activity began
+        let preservedStartTemp = activity.content.state.startTempF
+        let contentState = buildContentState(from: progress, startTempOverride: preservedStartTemp)
+        let content = ActivityContent(state: contentState, staleDate: Date().addingTimeInterval(120))
+
+        Task {
+            await activity.update(content)
+            recordDiagnostic("live-activity", "Updated Live Activity: \(progress.currentTempF)\u{00B0}F, phase=\(progress.phase)")
+        }
+
+        // If reached, end after a short display period
+        if progress.phase == "reached" {
+            endSpaHeatActivityIfNeeded(reason: "reached")
+        }
+    }
+
+    private func endSpaHeatActivityIfNeeded(reason: String) {
+        guard let activity = currentSpaHeatActivity else {
+            return
+        }
+
+        pushTokenObservationTask?.cancel()
+        pushTokenObservationTask = nil
+
+        let finalState: SpaHeatAttributes.ContentState
+        let dismissalPolicy: ActivityUIDismissalPolicy
+
+        if reason == "reached" {
+            finalState = SpaHeatAttributes.ContentState(
+                currentTempF: activity.content.state.targetTempF,
+                targetTempF: activity.content.state.targetTempF,
+                startTempF: activity.content.state.startTempF,
+                progressPct: 100,
+                minutesRemaining: 0,
+                phase: "reached",
+                milestone: "at_temp"
+            )
+            dismissalPolicy = .after(Date().addingTimeInterval(30))
+        } else {
+            finalState = activity.content.state
+            dismissalPolicy = .after(Date().addingTimeInterval(5))
+        }
+
+        let content = ActivityContent(state: finalState, staleDate: nil)
+
+        Task {
+            await activity.end(content, dismissalPolicy: dismissalPolicy)
+            recordDiagnostic("live-activity", "Ended Live Activity (reason: \(reason))")
+        }
+
+        currentSpaHeatActivity = nil
+    }
+
+    private func observePushTokenUpdates(for activity: Activity<SpaHeatAttributes>) {
+        pushTokenObservationTask?.cancel()
+        pushTokenObservationTask = Task { [weak self] in
+            for await tokenData in activity.pushTokenUpdates {
+                guard let self else { return }
+                let tokenString = tokenData.map { String(format: "%02x", $0) }.joined()
+                await MainActor.run {
+                    self.recordDiagnostic("live-activity", "Received Live Activity push token (\(tokenString.prefix(12))...)")
+                }
+                await self.registerLiveActivityToken(tokenString)
+            }
+        }
+    }
+
+    private func registerLiveActivityToken(_ token: String) async {
+        guard let baseURL = await MainActor.run(body: { self.activeBaseURL }) else {
+            return
+        }
+
+        do {
+            // The daemon requires "token" (FCM token). Send the existing FCM token
+            // alongside the live_activity_token so the daemon can match devices.
+            let fcmToken = await NotificationTokenManager.shared.currentToken ?? ""
+            try await PoolAPI(baseURL: baseURL).post("/api/devices/register", body: [
+                "token": fcmToken,
+                "platform": "ios",
+                "live_activity_token": token
+            ])
+            await MainActor.run {
+                self.recordDiagnostic("live-activity", "Registered Live Activity push token with daemon")
+            }
+        } catch {
+            await MainActor.run {
+                self.recordDiagnostic("live-activity", "Failed to register Live Activity token: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func buildContentState(from progress: SpaHeatProgress, startTempOverride: Int? = nil) -> SpaHeatAttributes.ContentState {
+        let startTemp = startTempOverride ?? progress.startTempF ?? progress.currentTempF
+        let pct = progress.phase == "reached" ? 100 : progress.progressPct
+
+        return SpaHeatAttributes.ContentState(
+            currentTempF: progress.currentTempF,
+            targetTempF: progress.targetTempF,
+            startTempF: startTemp,
+            progressPct: pct,
+            minutesRemaining: progress.minutesRemaining,
+            phase: progress.phase,
+            milestone: progress.milestone
+        )
+    }
+
     private func presentBanner(_ message: String) {
         bannerDismissTask?.cancel()
         bannerMessage = message
@@ -531,6 +698,7 @@ final class PoolViewModel: ObservableObject {
         )
         pendingMutations = reconciled.remainingMutations
         system = reconciled.system
+        evaluateSpaHeatActivity(for: reconciled.system)
     }
 
     private func removePendingMutation(id: UUID?) {

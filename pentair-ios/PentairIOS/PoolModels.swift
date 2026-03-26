@@ -89,6 +89,40 @@ struct BodyState: Decodable {
     }
 }
 
+struct SpaHeatProgress: Decodable {
+    let active: Bool
+    let phase: String
+    let startTempF: Int?
+    let currentTempF: Int
+    let targetTempF: Int
+    let progressPct: Int
+    let minutesRemaining: Int?
+    let milestone: String?
+    let sessionId: String?
+
+    init(
+        active: Bool = false,
+        phase: String = "off",
+        startTempF: Int? = nil,
+        currentTempF: Int = 0,
+        targetTempF: Int = 0,
+        progressPct: Int = 0,
+        minutesRemaining: Int? = nil,
+        milestone: String? = nil,
+        sessionId: String? = nil
+    ) {
+        self.active = active
+        self.phase = phase
+        self.startTempF = startTempF
+        self.currentTempF = currentTempF
+        self.targetTempF = targetTempF
+        self.progressPct = progressPct
+        self.minutesRemaining = minutesRemaining
+        self.milestone = milestone
+        self.sessionId = sessionId
+    }
+}
+
 struct SpaState: Decodable {
     let on: Bool
     let active: Bool
@@ -103,6 +137,7 @@ struct SpaState: Decodable {
     let heatEstimate: HeatEstimate?
     let temperatureDisplay: TemperatureDisplay
     let heatEstimateDisplay: HeatEstimateDisplay
+    let spaHeatProgress: SpaHeatProgress
     let accessories: [String: Bool]
 
     init(
@@ -119,6 +154,7 @@ struct SpaState: Decodable {
         heatEstimate: HeatEstimate? = nil,
         temperatureDisplay: TemperatureDisplay = .init(value: nil, isStale: false, staleReason: nil, lastReliableAtUnixMs: nil),
         heatEstimateDisplay: HeatEstimateDisplay = .init(state: "unavailable", reason: nil, availableInSeconds: nil, minutesRemaining: nil, targetTemperature: nil),
+        spaHeatProgress: SpaHeatProgress = .init(),
         accessories: [String: Bool]
     ) {
         self.on = on
@@ -134,6 +170,7 @@ struct SpaState: Decodable {
         self.heatEstimate = heatEstimate
         self.temperatureDisplay = temperatureDisplay
         self.heatEstimateDisplay = heatEstimateDisplay
+        self.spaHeatProgress = spaHeatProgress
         self.accessories = accessories
     }
 
@@ -151,6 +188,7 @@ struct SpaState: Decodable {
         case heatEstimate
         case temperatureDisplay
         case heatEstimateDisplay
+        case spaHeatProgress
         case accessories
     }
 
@@ -170,6 +208,7 @@ struct SpaState: Decodable {
         heatEstimate = try container.decodeIfPresent(HeatEstimate.self, forKey: .heatEstimate)
         temperatureDisplay = try container.decodeIfPresent(TemperatureDisplay.self, forKey: .temperatureDisplay) ?? .init(value: nil, isStale: false, staleReason: nil, lastReliableAtUnixMs: nil)
         heatEstimateDisplay = try container.decodeIfPresent(HeatEstimateDisplay.self, forKey: .heatEstimateDisplay) ?? .init(state: "unavailable", reason: nil, availableInSeconds: nil, minutesRemaining: nil, targetTemperature: nil)
+        spaHeatProgress = try container.decodeIfPresent(SpaHeatProgress.self, forKey: .spaHeatProgress) ?? .init()
         accessories = try container.decode([String: Bool].self, forKey: .accessories)
     }
 }
@@ -453,6 +492,7 @@ extension SpaState {
             heatMode: heatMode ?? self.heatMode,
             heating: heating ?? self.heating,
             heatEstimate: heatEstimate ?? self.heatEstimate,
+            spaHeatProgress: spaHeatProgress,
             accessories: accessories ?? self.accessories
         )
     }
@@ -488,6 +528,7 @@ extension SpaState {
             heatEstimate: nil,
             temperatureDisplay: emptyTemperatureDisplay,
             heatEstimateDisplay: emptyHeatEstimateDisplay,
+            spaHeatProgress: .init(),
             accessories: accessories
         )
     }
@@ -507,6 +548,7 @@ extension SpaState {
             heatEstimate: nil,
             temperatureDisplay: temperatureDisplay,
             heatEstimateDisplay: emptyHeatEstimateDisplay,
+            spaHeatProgress: spaHeatProgress,
             accessories: accessories
         )
     }

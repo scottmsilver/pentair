@@ -9,12 +9,15 @@ pub enum SpaHeatMilestone {
     AtTemp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpaHeatNotificationEvent {
     pub milestone: SpaHeatMilestone,
     pub current_temp: i32,
     pub target_temp: i32,
     pub minutes_remaining: Option<u32>,
+    pub start_temp_f: Option<f64>,
+    pub progress_pct: Option<u8>,
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -153,11 +156,23 @@ fn event(
     milestone: SpaHeatMilestone,
     input: &SpaHeatNotificationInput,
 ) -> SpaHeatNotificationEvent {
+    let progress_pct = trusted_progress(input).map(|p| (p * 100.0).round() as u8);
+    let session_id = input
+        .trusted_session_id
+        .map(|id| {
+            chrono::DateTime::from_timestamp(id, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| id.to_string())
+        })
+        .unwrap_or_default();
     SpaHeatNotificationEvent {
         milestone,
         current_temp: input.current_temp,
         target_temp: input.target_temp,
         minutes_remaining: input.minutes_remaining,
+        start_temp_f: input.trusted_session_start_temp_f,
+        progress_pct,
+        session_id,
     }
 }
 
@@ -313,6 +328,9 @@ mod tests {
                 current_temp: 92,
                 target_temp: 104,
                 minutes_remaining: Some(42),
+                start_temp_f: Some(80.0),
+                progress_pct: Some(50),
+                session_id: String::new(),
             },
             "°F",
         );

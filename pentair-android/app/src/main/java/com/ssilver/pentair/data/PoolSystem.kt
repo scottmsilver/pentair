@@ -44,6 +44,7 @@ data class SpaState(
     override val heat_estimate: HeatEstimate? = null,
     val temperature_display: TemperatureDisplay = TemperatureDisplay(null, false, null, null),
     val heat_estimate_display: HeatEstimateDisplay = HeatEstimateDisplay("unavailable", null, null, null, null),
+    val spa_heat_progress: SpaHeatProgress = SpaHeatProgress(),
     val accessories: Map<String, Boolean>
 ) : TemperaturePresentationSource
 
@@ -78,6 +79,19 @@ data class HeatEstimateDisplay(
     val available_in_seconds: Int?,
     val minutes_remaining: Int?,
     val target_temperature: Int?,
+)
+
+@JsonClass(generateAdapter = true)
+data class SpaHeatProgress(
+    val active: Boolean = false,
+    val phase: String = "off",
+    val start_temp_f: Int? = null,
+    val current_temp_f: Int = 0,
+    val target_temp_f: Int = 0,
+    val progress_pct: Int = 0,
+    val minutes_remaining: Int? = null,
+    val session_id: String? = null,
+    val milestone: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

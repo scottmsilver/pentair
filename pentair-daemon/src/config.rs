@@ -24,6 +24,9 @@ pub struct Config {
     pub fcm: FcmConfig,
 
     #[serde(default)]
+    pub apns: ApnsConfig,
+
+    #[serde(default)]
     pub heating: HeatingConfig,
 
     #[serde(default)]
@@ -36,6 +39,24 @@ pub struct FcmConfig {
     pub service_account: String,
     #[serde(default)]
     pub project_id: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ApnsConfig {
+    #[serde(default)]
+    pub key_id: String,
+    #[serde(default)]
+    pub team_id: String,
+    #[serde(default)]
+    pub key_path: String,
+    #[serde(default)]
+    pub bundle_id: String,
+    #[serde(default = "default_apns_environment")]
+    pub environment: String,
+}
+
+fn default_apns_environment() -> String {
+    "development".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,6 +191,7 @@ impl Default for Config {
             bind: default_bind(),
             associations: Default::default(),
             fcm: Default::default(),
+            apns: Default::default(),
             heating: Default::default(),
             notifications: Default::default(),
         }

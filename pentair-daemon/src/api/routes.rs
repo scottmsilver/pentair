@@ -313,15 +313,26 @@ async fn refresh(State(state): State<AppState>) -> Json<serde_json::Value> {
 #[derive(Deserialize)]
 struct RegisterRequest {
     token: String,
+    #[serde(default)]
+    platform: Option<String>,
+    #[serde(default)]
+    live_activity_token: Option<String>,
 }
 
 async fn register_device(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
-    match state.devices.register(body.token).await {
+    match state
+        .devices
+        .register(body.token, body.platform, body.live_activity_token)
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": e}))),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": e})),
+        ),
     }
 }
 

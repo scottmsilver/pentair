@@ -20,7 +20,39 @@
 		000000000000000000000028 /* PoolAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000024 /* PoolAppDelegate.swift */; };
 		000000000000000000000029 /* FirebaseCore in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000002C /* FirebaseCore */; };
 		00000000000000000000002A /* FirebaseMessaging in Frameworks */ = {isa = PBXBuildFile; productRef = 00000000000000000000002D /* FirebaseMessaging */; };
+		/* SpaHeatAttributes in main app Sources */
+		000000000000000000000030 /* SpaHeatAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000002E /* SpaHeatAttributes.swift */; };
+		/* Widget extension build files */
+		000000000000000000000040 /* SpaHeatLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000031 /* SpaHeatLiveActivity.swift */; };
+		000000000000000000000041 /* SpaHeatWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 000000000000000000000032 /* SpaHeatWidgetBundle.swift */; };
+		000000000000000000000042 /* SpaHeatAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00000000000000000000002E /* SpaHeatAttributes.swift */; };
+		/* Widget embeds in app */
+		000000000000000000000043 /* SpaHeatWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 000000000000000000000034 /* SpaHeatWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		000000000000000000000044 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000000000033;
+			remoteInfo = SpaHeatWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		000000000000000000000045 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				000000000000000000000043 /* SpaHeatWidget.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		000000000000000000000005 /* PentairIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PentairIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -37,6 +69,10 @@
 		000000000000000000000023 /* NotificationTokenManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTokenManager.swift; sourceTree = "<group>"; };
 		000000000000000000000024 /* PoolAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoolAppDelegate.swift; sourceTree = "<group>"; };
 		000000000000000000000025 /* PentairIOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PentairIOS.entitlements; sourceTree = "<group>"; };
+		00000000000000000000002E /* SpaHeatAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaHeatAttributes.swift; sourceTree = "<group>"; };
+		000000000000000000000031 /* SpaHeatLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaHeatLiveActivity.swift; sourceTree = "<group>"; };
+		000000000000000000000032 /* SpaHeatWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaHeatWidgetBundle.swift; sourceTree = "<group>"; };
+		000000000000000000000034 /* SpaHeatWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SpaHeatWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -50,6 +86,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		000000000000000000000046 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -57,6 +100,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000004 /* PentairIOS */,
+				000000000000000000000035 /* SpaHeatWidget */,
 				000000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -65,6 +109,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000005 /* PentairIOS.app */,
+				000000000000000000000034 /* SpaHeatWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -80,12 +125,22 @@
 				00000000000000000000001A /* BonjourDiscovery.swift */,
 				000000000000000000000023 /* NotificationTokenManager.swift */,
 				000000000000000000000024 /* PoolAppDelegate.swift */,
+				00000000000000000000002E /* SpaHeatAttributes.swift */,
 				00000000000000000000001C /* Assets.xcassets */,
 				000000000000000000000022 /* GoogleService-Info.plist */,
 				00000000000000000000001E /* Info.plist */,
 				000000000000000000000025 /* PentairIOS.entitlements */,
 			);
 			path = PentairIOS;
+			sourceTree = "<group>";
+		};
+		000000000000000000000035 /* SpaHeatWidget */ = {
+			isa = PBXGroup;
+			children = (
+				000000000000000000000031 /* SpaHeatLiveActivity.swift */,
+				000000000000000000000032 /* SpaHeatWidgetBundle.swift */,
+			);
+			path = SpaHeatWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -98,10 +153,12 @@
 				00000000000000000000000D /* Sources */,
 				00000000000000000000000E /* Frameworks */,
 				00000000000000000000000F /* Resources */,
+				000000000000000000000045 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				000000000000000000000047 /* PBXTargetDependency */,
 			);
 			name = PentairIOS;
 			packageProductDependencies = (
@@ -111,6 +168,22 @@
 			productName = PentairIOS;
 			productReference = 000000000000000000000005 /* PentairIOS.app */;
 			productType = "com.apple.product-type.application";
+		};
+		000000000000000000000033 /* SpaHeatWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 000000000000000000000039 /* Build configuration list for PBXNativeTarget "SpaHeatWidget" */;
+			buildPhases = (
+				000000000000000000000036 /* Sources */,
+				000000000000000000000046 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SpaHeatWidget;
+			productName = SpaHeatWidget;
+			productReference = 000000000000000000000034 /* SpaHeatWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -129,6 +202,9 @@
 								enabled = 1;
 							};
 						};
+					};
+					000000000000000000000033 = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -150,6 +226,7 @@
 			);
 			targets = (
 				000000000000000000000006 /* PentairIOS */,
+				000000000000000000000033 /* SpaHeatWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -179,10 +256,29 @@
 				000000000000000000000019 /* PoolModels.swift in Sources */,
 				000000000000000000000027 /* NotificationTokenManager.swift in Sources */,
 				00000000000000000000001B /* BonjourDiscovery.swift in Sources */,
+				000000000000000000000030 /* SpaHeatAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		000000000000000000000036 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				000000000000000000000040 /* SpaHeatLiveActivity.swift in Sources */,
+				000000000000000000000041 /* SpaHeatWidgetBundle.swift in Sources */,
+				000000000000000000000042 /* SpaHeatAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		000000000000000000000047 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000000000033 /* SpaHeatWidget */;
+			targetProxy = 000000000000000000000044 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCRemoteSwiftPackageReference section */
 		00000000000000000000002B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
@@ -289,6 +385,64 @@
 			};
 			name = Release;
 		};
+		/* Widget Debug */
+		000000000000000000000037 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M8B368H9T5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SpaHeatWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SpaHeatWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ssilver.pentair.ios.SpaHeatWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		/* Widget Release */
+		000000000000000000000038 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = M8B368H9T5;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SpaHeatWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SpaHeatWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ssilver.pentair.ios.SpaHeatWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -306,6 +460,15 @@
 			buildConfigurations = (
 				00000000000000000000000B /* Debug */,
 				00000000000000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		000000000000000000000039 /* Build configuration list for PBXNativeTarget "SpaHeatWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				000000000000000000000037 /* Debug */,
+				000000000000000000000038 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

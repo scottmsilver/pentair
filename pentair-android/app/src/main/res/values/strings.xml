@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Pool</string>
+    <string name="widget_description">Shows spa heating progress and pool temperatures</string>
 </resources>

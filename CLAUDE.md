@@ -65,6 +65,23 @@ Smart behaviors: jets auto-enables spa, spa-off disables jets, light mode tracke
 
 Pool and spa bodies include `active: bool` — true when the circuit is on AND the pump is running with RPM > 0. Use `on` for what the user commanded, `active` for whether water is actually flowing.
 
+## Mobile Architecture — Layering Rules
+
+iOS and Android clients should use the same layering for the same feature. When implementing a feature on both platforms, the logic should live at the same architectural layer. Cross-platform consistency makes the codebase predictable — anyone reading one platform can infer how the other works.
+
+**Layers (from bottom to top):**
+
+1. **Data layer** (Repository / data classes) — networking, caching, persistence. Transforms wire data into domain models. No UI logic, no presentation decisions.
+2. **ViewModel / presentation layer** — state machines, transition detection, "when to show what." Decides when to start/stop/update UI elements based on domain state changes. This is where feature lifecycle logic belongs.
+3. **View layer** (Compose / SwiftUI) — pure rendering. Takes state, produces pixels. No business logic.
+
+**Rules:**
+
+- Feature lifecycle logic (detecting state transitions, deciding when to show/hide a widget or notification) belongs in the **ViewModel**, not the data layer. The data layer provides the state; the ViewModel reacts to it.
+- Each platform feature should have **one manager/controller instance**, not duplicates. If both a push handler and a foreground path need to drive the same UI, they should share one instance (via DI singleton or equivalent).
+- Push message handlers (FCM Service, APNs delegate) should be thin — parse the payload and forward to the shared manager. Don't duplicate state machine logic that already exists in the ViewModel.
+- When the daemon provides display-ready contracts (`temperature_display`, `heat_estimate_display`), use them. Don't recompute server-side logic on the client.
+
 ## Key Files
 
 - `docs/protocol-reference.md` — byte-level protocol documentation

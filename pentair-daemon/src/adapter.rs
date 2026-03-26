@@ -1,5 +1,6 @@
+use crate::apns::ApnsSender;
 use crate::fcm::FcmSender;
-use crate::spa_notifications::{notification_text, SpaHeatNotificationEvent};
+use crate::spa_notifications::{notification_text, SpaHeatMilestone, SpaHeatNotificationEvent};
 use crate::state::SharedState;
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Timelike};
 use pentair_client::client::Client;
@@ -65,6 +66,7 @@ pub async fn run_adapter(
     mut cmd_rx: mpsc::Receiver<AdapterCommand>,
     push_tx: broadcast::Sender<PushEvent>,
     fcm: Option<Arc<FcmSender>>,
+    apns: Option<Arc<ApnsSender>>,
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(60);
@@ -131,7 +133,7 @@ pub async fn run_adapter(
                                 let mut guard = state.write().await;
                                 guard.pool_system_and_spa_notification_events()
                             };
-                            detect_transitions(&previous_system, &current, &spa_events, &fcm).await;
+                            detect_transitions(&previous_system, &current, &spa_events, &fcm, &apns).await;
                             previous_system = current;
                         }
                         _ = refresh_interval.tick() => {
@@ -144,7 +146,7 @@ pub async fn run_adapter(
                                 let mut guard = state.write().await;
                                 guard.pool_system_and_spa_notification_events()
                             };
-                            detect_transitions(&previous_system, &current, &spa_events, &fcm).await;
+                            detect_transitions(&previous_system, &current, &spa_events, &fcm, &apns).await;
                             previous_system = current;
                         }
                         _ = ping_interval.tick() => {
@@ -442,11 +444,8 @@ async fn detect_transitions(
     current: &Option<PoolSystem>,
     spa_events: &[SpaHeatNotificationEvent],
     fcm: &Option<Arc<FcmSender>>,
+    apns: &Option<Arc<ApnsSender>>,
 ) {
-    let sender = match fcm {
-        Some(s) => s,
-        None => return,
-    };
     let (prev, curr) = match (previous, current) {
         (Some(p), Some(c)) => (p, c),
         _ => return,
@@ -454,25 +453,201 @@ async fn detect_transitions(
 
     for event in spa_events {
         let (title, body) = notification_text(event, &curr.system.temp_unit);
-        sender.send(&title, &body).await;
+        let is_milestone = matches!(
+            event.milestone,
+            SpaHeatMilestone::HeatingStarted
+                | SpaHeatMilestone::Halfway
+                | SpaHeatMilestone::AlmostReady
+                | SpaHeatMilestone::AtTemp
+        );
+
+        let payload = build_spa_heat_event_payload(event);
+
+        // Send FCM data+notification (notification block only for milestones).
+        // Milestone events go to all devices; non-milestone data-only go to Android only.
+        if let Some(sender) = fcm {
+            if is_milestone {
+                sender
+                    .send_data_notification(Some(&title), Some(&body), payload.fcm_data)
+                    .await;
+            } else {
+                sender
+                    .send_data_notification_android(None, None, payload.fcm_data)
+                    .await;
+            }
+        }
+
+        // Send APNs live activity update
+        if let Some(apns_sender) = apns {
+            if event.milestone == SpaHeatMilestone::AtTemp {
+                apns_sender
+                    .send_live_activity_end(&payload.apns_content_state)
+                    .await;
+            } else {
+                apns_sender
+                    .send_live_activity_update(&payload.apns_content_state, is_milestone)
+                    .await;
+            }
+        }
     }
 
-    // Freeze protection activated
-    if curr.system.freeze_protection && !prev.system.freeze_protection {
-        sender
-            .send("Freeze Protection", "Freeze protection has been activated.")
-            .await;
+    // Continuous spa heat progress updates (data-only, every refresh cycle)
+    // This runs even when no milestone fires — keeps background Android/iOS apps updated.
+    // FCM data-only messages go only to Android devices (iOS uses APNs live activities).
+    if spa_events.is_empty() {
+        if let Some(spa) = curr.spa.as_ref() {
+            let progress = &spa.spa_heat_progress;
+            if progress.active {
+                let payload = build_spa_heat_progress_payload(progress);
+
+                if let Some(sender) = fcm {
+                    sender
+                        .send_data_notification_android(None, None, payload.fcm_data)
+                        .await;
+                }
+
+                // Send APNs live activity update (silent, non-milestone)
+                if let Some(apns_sender) = apns {
+                    apns_sender
+                        .send_live_activity_update(&payload.apns_content_state, false)
+                        .await;
+                }
+            }
+        }
     }
 
-    // Heater started (pool)
-    if let (Some(prev_pool), Some(curr_pool)) = (&prev.pool, &curr.pool) {
-        if prev_pool.heating == "off" && curr_pool.heating != "off" {
+    // Non-spa-heat transitions: use simple FCM notifications (no APNs)
+    if let Some(sender) = fcm {
+        // Freeze protection activated
+        if curr.system.freeze_protection && !prev.system.freeze_protection {
             sender
-                .send(
-                    "Pool Heater Started",
-                    &format!("Pool heater is now active ({}).", curr_pool.heating),
-                )
+                .send("Freeze Protection", "Freeze protection has been activated.")
                 .await;
         }
+
+        // Heater started (pool)
+        if let (Some(prev_pool), Some(curr_pool)) = (&prev.pool, &curr.pool) {
+            if prev_pool.heating == "off" && curr_pool.heating != "off" {
+                sender
+                    .send(
+                        "Pool Heater Started",
+                        &format!("Pool heater is now active ({}).", curr_pool.heating),
+                    )
+                    .await;
+            }
+        }
+    }
+}
+
+fn milestone_to_string(milestone: SpaHeatMilestone) -> &'static str {
+    match milestone {
+        SpaHeatMilestone::HeatingStarted => "heating_started",
+        SpaHeatMilestone::EstimateReady => "estimate_ready",
+        SpaHeatMilestone::Halfway => "halfway",
+        SpaHeatMilestone::AlmostReady => "almost_ready",
+        SpaHeatMilestone::AtTemp => "at_temp",
+    }
+}
+
+/// Shared payload data for both FCM data messages and APNs content-state updates.
+struct SpaHeatPayload {
+    fcm_data: std::collections::HashMap<String, String>,
+    apns_content_state: serde_json::Value,
+}
+
+/// Build both FCM and APNs payloads from a milestone event.
+fn build_spa_heat_event_payload(event: &SpaHeatNotificationEvent) -> SpaHeatPayload {
+    let phase = match event.milestone {
+        SpaHeatMilestone::HeatingStarted => "started",
+        SpaHeatMilestone::AtTemp => "reached",
+        _ => "tracking",
+    };
+    let milestone_str = milestone_to_string(event.milestone);
+
+    let mut data = std::collections::HashMap::new();
+    data.insert("kind".to_string(), "spa_heat".to_string());
+    data.insert("phase".to_string(), phase.to_string());
+    data.insert("milestone".to_string(), milestone_str.to_string());
+    data.insert(
+        "current_temp_f".to_string(),
+        event.current_temp.to_string(),
+    );
+    data.insert("target_temp_f".to_string(), event.target_temp.to_string());
+    if let Some(start) = event.start_temp_f {
+        data.insert("start_temp_f".to_string(), format!("{}", start as i32));
+    }
+    if let Some(pct) = event.progress_pct {
+        data.insert("progress_pct".to_string(), pct.to_string());
+    }
+    if let Some(mins) = event.minutes_remaining {
+        data.insert("minutes_remaining".to_string(), mins.to_string());
+    }
+    if !event.session_id.is_empty() {
+        data.insert("session_id".to_string(), event.session_id.clone());
+    }
+
+    // APNs content state uses camelCase per Swift conventions.
+    // Option<T> serializes as JSON null when None via serde_json::json!
+    let content_state = serde_json::json!({
+        "currentTempF": event.current_temp,
+        "targetTempF": event.target_temp,
+        "startTempF": event.start_temp_f.map(|t| t as i32).unwrap_or(event.current_temp),
+        "progressPct": event.progress_pct,
+        "minutesRemaining": event.minutes_remaining,
+        "phase": phase,
+        "milestone": milestone_str,
+    });
+
+    SpaHeatPayload {
+        fcm_data: data,
+        apns_content_state: content_state,
+    }
+}
+
+/// Build both FCM and APNs payloads from continuous spa heat progress data.
+fn build_spa_heat_progress_payload(
+    progress: &pentair_protocol::semantic::SpaHeatProgress,
+) -> SpaHeatPayload {
+    let mut data = std::collections::HashMap::new();
+    data.insert("kind".to_string(), "spa_heat".to_string());
+    data.insert("phase".to_string(), progress.phase.clone());
+    data.insert(
+        "current_temp_f".to_string(),
+        progress.current_temp_f.to_string(),
+    );
+    data.insert(
+        "target_temp_f".to_string(),
+        progress.target_temp_f.to_string(),
+    );
+    data.insert(
+        "progress_pct".to_string(),
+        progress.progress_pct.to_string(),
+    );
+    if let Some(start) = progress.start_temp_f {
+        data.insert("start_temp_f".to_string(), start.to_string());
+    }
+    if let Some(mins) = progress.minutes_remaining {
+        data.insert("minutes_remaining".to_string(), mins.to_string());
+    }
+    if let Some(ref sid) = progress.session_id {
+        data.insert("session_id".to_string(), sid.clone());
+    }
+    if let Some(ref ms) = progress.milestone {
+        data.insert("milestone".to_string(), ms.clone());
+    }
+
+    let content_state = serde_json::json!({
+        "currentTempF": progress.current_temp_f,
+        "targetTempF": progress.target_temp_f,
+        "startTempF": progress.start_temp_f.unwrap_or(progress.current_temp_f),
+        "progressPct": progress.progress_pct,
+        "minutesRemaining": progress.minutes_remaining,
+        "phase": progress.phase,
+        "milestone": progress.milestone,
+    });
+
+    SpaHeatPayload {
+        fcm_data: data,
+        apns_content_state: content_state,
     }
 }

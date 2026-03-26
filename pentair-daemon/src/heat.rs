@@ -6,7 +6,8 @@ use crate::spa_notifications::{
 use chrono::{NaiveDate, NaiveDateTime};
 use pentair_protocol::responses::{HistoryData, TimeRangePoint};
 use pentair_protocol::semantic::{
-    BodyState, HeatEstimate, HeatEstimateDisplay, PoolSystem, SpaState, TemperatureDisplay,
+    BodyState, HeatEstimate, HeatEstimateDisplay, PoolSystem, SpaHeatProgress, SpaState,
+    TemperatureDisplay,
 };
 use pentair_protocol::types::SLDateTime;
 use serde::{Deserialize, Serialize};
@@ -387,6 +388,97 @@ impl HeatEstimator {
                 now_unix_ms,
                 spa.heat_estimate.as_ref(),
             );
+            spa.spa_heat_progress = self.build_spa_heat_progress(spa);
+        }
+    }
+
+    fn build_spa_heat_progress(&self, spa: &SpaState) -> SpaHeatProgress {
+        let heating_active = spa.on
+            && spa.heat_mode != "off"
+            && spa.heating != "off"
+            && spa.heating != "unknown";
+
+        if !heating_active {
+            return SpaHeatProgress {
+                current_temp_f: spa.temperature,
+                target_temp_f: spa.setpoint,
+                ..SpaHeatProgress::default()
+            };
+        }
+
+        // Use the trusted session data when available for accurate start temp
+        let session_start_temp = self
+            .spa_session
+            .as_ref()
+            .map(|s| s.start_temp_f as i32);
+        let session_id = self.spa_session.as_ref().map(|s| {
+            let secs = s.started_at_unix_ms / 1000;
+            chrono::DateTime::from_timestamp(secs, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_else(|| s.started_at_unix_ms.to_string())
+        });
+
+        let start = session_start_temp.unwrap_or(spa.temperature);
+        let current = spa.temperature;
+        let target = spa.setpoint;
+
+        // Determine phase
+        let phase = if current >= target {
+            "reached"
+        } else if spa
+            .heat_estimate
+            .as_ref()
+            .map(|e| e.available && e.minutes_remaining.is_some())
+            .unwrap_or(false)
+        {
+            "tracking"
+        } else {
+            "started"
+        };
+
+        // Compute progress
+        let progress_pct = if phase == "reached" {
+            100u8
+        } else {
+            let delta = target - start;
+            if delta > 0 {
+                (((current - start).max(0) as f64 / delta as f64) * 100.0)
+                    .round()
+                    .clamp(0.0, 100.0) as u8
+            } else {
+                0u8
+            }
+        };
+
+        let minutes_remaining = spa
+            .heat_estimate
+            .as_ref()
+            .filter(|e| e.available)
+            .and_then(|e| e.minutes_remaining);
+
+        // Derive milestone from progress/phase
+        let milestone = if phase == "reached" {
+            Some("at_temp".to_string())
+        } else if progress_pct >= 90 {
+            Some("almost_ready".to_string())
+        } else if progress_pct >= 50 {
+            Some("halfway".to_string())
+        } else if progress_pct < 5 && minutes_remaining.is_none() {
+            Some("heating_started".to_string())
+        } else {
+            None
+        };
+
+        SpaHeatProgress {
+            active: true,
+            phase: phase.to_string(),
+            start_temp_f: session_start_temp,
+            current_temp_f: current,
+            target_temp_f: target,
+            progress_pct,
+            minutes_remaining,
+            session_id,
+            milestone,
         }
     }
 
@@ -1232,7 +1324,7 @@ mod tests {
     use super::*;
     use pentair_protocol::responses::{HistoryData, TimeRangePoint, TimeTempPoint};
     use pentair_protocol::semantic::{
-        AuxState, BodyState, LightState, PumpInfo, SpaState, SystemInfo,
+        AuxState, BodyState, LightState, PumpInfo, SpaHeatProgress, SpaState, SystemInfo,
     };
     use std::collections::HashMap;
 
@@ -1319,6 +1411,11 @@ mod tests {
                     available_in_seconds: None,
                     minutes_remaining: None,
                     target_temperature: None,
+                },
+                spa_heat_progress: SpaHeatProgress {
+                    current_temp_f: spa_temp,
+                    target_temp_f: spa_setpoint,
+                    ..SpaHeatProgress::default()
                 },
                 accessories: HashMap::new(),
             }),
