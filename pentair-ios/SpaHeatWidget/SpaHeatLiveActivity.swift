@@ -161,12 +161,6 @@ private struct LockScreenView: View {
             // Progress bar
             HeatProgressBar(progressPct: state.progressPct, phase: state.phase)
 
-            // Progress percentage
-            if state.phase != "reached" && state.progressPct > 0 {
-                Text("\(state.progressPct)%")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
         }
         .padding()
         .accessibilityElement(children: .combine)
