@@ -5,6 +5,8 @@ mod config;
 mod devices;
 mod fcm;
 mod heat;
+mod scheduled_heat;
+mod scenes;
 mod spa_notifications;
 mod state;
 
@@ -51,6 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .join("devices.json");
     let devices = devices::DeviceManager::load(devices_path);
 
+    // Load scheduled heat state (persisted timers)
+    let scheduled_heat_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".pentair")
+        .join("scheduled-heat.json");
+    let scheduled_heat = scheduled_heat::new_shared_scheduled_heat(scheduled_heat_path);
+
     // Create FCM sender (None if not configured)
     let fcm_sender = fcm::FcmSender::new(
         config.fcm.project_id.clone(),
@@ -79,8 +88,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     });
 
+    // Resume any persisted heat schedule
+    scheduled_heat::spawn_heat_timer_full(
+        scheduled_heat.clone(),
+        state.clone(),
+        cmd_tx.clone(),
+    )
+    .await;
+
+    // Resolve scenes (use configured scenes, or defaults if none configured)
+    let scene_store = scenes::SceneStore::new(scenes::resolve_scenes(&config.scenes));
+    info!("loaded {} scene(s)", scene_store.list().len());
+
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices);
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);
