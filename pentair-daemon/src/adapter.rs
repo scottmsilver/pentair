@@ -525,17 +525,7 @@ async fn detect_transitions(
                 .await;
         }
 
-        // Heater started (pool)
-        if let (Some(prev_pool), Some(curr_pool)) = (&prev.pool, &curr.pool) {
-            if prev_pool.heating == "off" && curr_pool.heating != "off" {
-                sender
-                    .send(
-                        "Pool Heater Started",
-                        &format!("Pool heater is now active ({}).", curr_pool.heating),
-                    )
-                    .await;
-            }
-        }
+        // Pool heater notifications disabled — pool heating is routine/scheduled.
     }
 }
 
