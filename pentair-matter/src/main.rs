@@ -28,6 +28,9 @@ struct Cli {
     discriminator: Option<u16>,
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+    /// Delete fabric state and re-enter commissioning mode
+    #[arg(long)]
+    reset_fabric: bool,
 }
 
 #[tokio::main]
@@ -35,6 +38,16 @@ async fn main() {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
     let config = Config::load(cli.daemon_url, cli.discriminator, cli.config);
+
+    if cli.reset_fabric {
+        if config.fabric_path.exists() {
+            std::fs::remove_file(&config.fabric_path).expect("failed to delete fabric file");
+            tracing::info!(path = %config.fabric_path.display(), "Fabric state deleted — will enter commissioning mode");
+        } else {
+            tracing::info!(path = %config.fabric_path.display(), "No fabric file found — already in commissioning mode");
+        }
+    }
+
     tracing::info!(daemon_url = %config.daemon_url, "pentair-matter starting");
 
     let daemon = DaemonClient::new(&config.daemon_url);
