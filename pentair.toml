@@ -1,0 +1,12 @@
+# Pentair daemon configuration
+# Credentials are stored in ~/.pentair/firebase/ (not checked in)
+
+[fcm]
+service_account = "/home/ssilver/.pentair/firebase/pool-eb7ed-pentair-daemon-fcm.json"
+project_id = "pool-eb7ed"
+
+[apns]
+key_id = "CMMDZ3CMW8"
+team_id = "M8B368H9T5"
+key_path = "/home/ssilver/.pentair/firebase/AuthKey_CMMDZ3CMW8.p8"
+bundle_id = "com.ssilver.pentair.ios"

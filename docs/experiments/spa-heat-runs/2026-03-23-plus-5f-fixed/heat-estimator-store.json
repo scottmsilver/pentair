@@ -1,13 +1,13 @@
 {
-  "pool_learned_rate_f_per_hour": null,
-  "spa_learned_rate_f_per_hour": 29.05193725828715,
+  "pool_learned_rate_f_per_hour": 1.8155367279640144,
+  "spa_learned_rate_f_per_hour": 28.293184066799387,
   "pool_last_reliable_temperature": {
-    "temperature": 88,
-    "observed_at_unix_ms": 1774386507900
+    "temperature": 89,
+    "observed_at_unix_ms": 1774655722945
   },
   "spa_last_reliable_temperature": {
-    "temperature": 91,
-    "observed_at_unix_ms": 1774385539411
+    "temperature": 104,
+    "observed_at_unix_ms": 1774667632966
   },
   "recent_sessions": [
     {
@@ -31,6 +31,94 @@
       "average_air_temp_f": 65.0,
       "duration_minutes": 10.89675,
       "average_rate_f_per_hour": 27.531144607337048
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774528331436,
+      "ended_at_unix_ms": 1774529138733,
+      "start_temp_f": 85.0,
+      "end_temp_f": 92.0,
+      "target_temp_f": 100.0,
+      "average_air_temp_f": 45.107142857142854,
+      "duration_minutes": 13.449816666666669,
+      "average_rate_f_per_hour": 31.22719144870624
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774551541899,
+      "ended_at_unix_ms": 1774553329712,
+      "start_temp_f": 85.0,
+      "end_temp_f": 98.0,
+      "target_temp_f": 100.0,
+      "average_air_temp_f": 100.06451612903226,
+      "duration_minutes": 29.79265,
+      "average_rate_f_per_hour": 26.18095402725169
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774561531866,
+      "ended_at_unix_ms": 1774563287650,
+      "start_temp_f": 86.0,
+      "end_temp_f": 99.0,
+      "target_temp_f": 102.0,
+      "average_air_temp_f": 82.13333333333334,
+      "duration_minutes": 29.2548,
+      "average_rate_f_per_hour": 26.662291316296812
+    },
+    {
+      "body": "Pool",
+      "started_at_unix_ms": 1774563501248,
+      "ended_at_unix_ms": 1774567102913,
+      "start_temp_f": 85.0,
+      "end_temp_f": 87.0,
+      "target_temp_f": 87.0,
+      "average_air_temp_f": 80.24590163934427,
+      "duration_minutes": 60.02775,
+      "average_rate_f_per_hour": 1.9990754276147282
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774575112936,
+      "ended_at_unix_ms": 1774576129158,
+      "start_temp_f": 90.0,
+      "end_temp_f": 98.0,
+      "target_temp_f": 102.0,
+      "average_air_temp_f": 75.0,
+      "duration_minutes": 16.9283,
+      "average_rate_f_per_hour": 28.354885015033997
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774622692939,
+      "ended_at_unix_ms": 1774624552938,
+      "start_temp_f": 86.0,
+      "end_temp_f": 102.0,
+      "target_temp_f": 102.0,
+      "average_air_temp_f": 52.92063492063492,
+      "duration_minutes": 30.999983333333333,
+      "average_rate_f_per_hour": 30.967758584816448
+    },
+    {
+      "body": "Pool",
+      "started_at_unix_ms": 1774630432906,
+      "ended_at_unix_ms": 1774640812932,
+      "start_temp_f": 85.0,
+      "end_temp_f": 89.0,
+      "target_temp_f": 89.0,
+      "average_air_temp_f": 79.56484149855908,
+      "duration_minutes": 173.00043333333332,
+      "average_rate_f_per_hour": 1.3872797621123494
+    },
+    {
+      "body": "Spa",
+      "started_at_unix_ms": 1774661632936,
+      "ended_at_unix_ms": 1774663792940,
+      "start_temp_f": 88.0,
+      "end_temp_f": 104.0,
+      "target_temp_f": 104.0,
+      "average_air_temp_f": 77.56164383561644,
+      "duration_minutes": 36.00006666666667,
+      "average_rate_f_per_hour": 26.66661728404207
     }
   ]
 }
