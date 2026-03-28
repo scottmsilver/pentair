@@ -20,19 +20,32 @@ pub struct SpaHeatNotificationEvent {
     pub session_id: String,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SpaHeatNotificationState {
-    run_active: bool,
-    heating_started_sent: bool,
-    estimate_ready_sent: bool,
-    halfway_sent: bool,
-    almost_ready_sent: bool,
-    at_temp_sent: bool,
-    trusted_session_id: Option<i64>,
+#[derive(Debug, Clone)]
+pub enum SpaHeatNotificationState {
+    Idle,
+    Heating {
+        heating_started_sent: bool,
+        estimate_ready_sent: bool,
+        halfway_sent: bool,
+        almost_ready_sent: bool,
+        at_temp_sent: bool,
+        trusted_session_id: Option<i64>,
+    },
+    Maintaining {
+        setpoint: i32,
+    },
+}
+
+impl Default for SpaHeatNotificationState {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SpaHeatNotificationInput {
+    pub spa_on: bool,
+    pub heat_mode_off: bool,
     pub heating_active: bool,
     pub current_temp: i32,
     pub target_temp: i32,
@@ -48,66 +61,128 @@ pub fn evaluate_spa_heat_notifications(
     input: &SpaHeatNotificationInput,
     state: &mut SpaHeatNotificationState,
 ) -> Vec<SpaHeatNotificationEvent> {
-    if !config.enabled || !input.heating_active {
-        *state = SpaHeatNotificationState::default();
+    if !config.enabled || !input.spa_on || input.heat_mode_off {
+        *state = SpaHeatNotificationState::Idle;
         return Vec::new();
     }
 
-    let mut events = Vec::new();
-
-    if !state.run_active {
-        state.run_active = true;
-        if config.heating_started {
-            state.heating_started_sent = true;
-            events.push(event(SpaHeatMilestone::HeatingStarted, input));
-        }
-    }
-
-    if !events.is_empty() {
-        return events;
-    }
-
-    if !state.estimate_ready_sent && input.minutes_remaining.is_some() && config.estimate_ready {
-        state.estimate_ready_sent = true;
-        events.push(event(SpaHeatMilestone::EstimateReady, input));
-    }
-
-    if !events.is_empty() {
-        return events;
-    }
-
-    if let Some(session_id) = input.trusted_session_id {
-        if state.trusted_session_id != Some(session_id) {
-            state.trusted_session_id = Some(session_id);
-            state.halfway_sent = false;
-            state.almost_ready_sent = false;
-            state.at_temp_sent = false;
-        }
-    }
-
-    if let Some(progress) = trusted_progress(input) {
-        let delta_f = (input.trusted_session_target_temp_f.unwrap_or_default()
-            - input.trusted_session_start_temp_f.unwrap_or_default())
-        .max(0.0);
-
-        if delta_f >= config.minimum_delta_f {
-            if config.halfway && !state.halfway_sent && progress >= 0.5 {
-                state.halfway_sent = true;
-                events.push(event(SpaHeatMilestone::Halfway, input));
-            }
-            if config.almost_ready && !state.almost_ready_sent && progress >= 0.9 {
-                state.almost_ready_sent = true;
-                events.push(event(SpaHeatMilestone::AlmostReady, input));
+    match state {
+        SpaHeatNotificationState::Idle => {
+            if input.heating_active {
+                let mut heating_started_sent = false;
+                let mut events = Vec::new();
+                if config.heating_started {
+                    heating_started_sent = true;
+                    events.push(event(SpaHeatMilestone::HeatingStarted, input));
+                }
+                *state = SpaHeatNotificationState::Heating {
+                    heating_started_sent,
+                    estimate_ready_sent: false,
+                    halfway_sent: false,
+                    almost_ready_sent: false,
+                    at_temp_sent: false,
+                    trusted_session_id: None,
+                };
+                events
+            } else {
+                Vec::new()
             }
         }
-    }
 
-    if config.at_temp && !state.at_temp_sent && input.current_temp >= input.target_temp {
-        state.at_temp_sent = true;
-        events.push(event(SpaHeatMilestone::AtTemp, input));
-    }
+        SpaHeatNotificationState::Heating {
+            heating_started_sent,
+            estimate_ready_sent,
+            halfway_sent,
+            almost_ready_sent,
+            at_temp_sent,
+            trusted_session_id,
+        } => {
+            if !input.heating_active {
+                // Heater cycled off but spa still on — don't change phase,
+                // just skip this cycle. Milestones resume when heater kicks back on.
+                return Vec::new();
+            }
 
-    events
+            let mut events = Vec::new();
+
+            if !*heating_started_sent && config.heating_started {
+                *heating_started_sent = true;
+                events.push(event(SpaHeatMilestone::HeatingStarted, input));
+                return events;
+            }
+
+            if !*estimate_ready_sent && input.minutes_remaining.is_some() && config.estimate_ready {
+                *estimate_ready_sent = true;
+                events.push(event(SpaHeatMilestone::EstimateReady, input));
+                return events;
+            }
+
+            if let Some(session_id) = input.trusted_session_id {
+                if *trusted_session_id != Some(session_id) {
+                    *trusted_session_id = Some(session_id);
+                    *halfway_sent = false;
+                    *almost_ready_sent = false;
+                    *at_temp_sent = false;
+                }
+            }
+
+            if let Some(progress) = trusted_progress(input) {
+                let delta_f = (input.trusted_session_target_temp_f.unwrap_or_default()
+                    - input.trusted_session_start_temp_f.unwrap_or_default())
+                .max(0.0);
+
+                if delta_f >= config.minimum_delta_f {
+                    if config.halfway && !*halfway_sent && progress >= 0.5 {
+                        *halfway_sent = true;
+                        events.push(event(SpaHeatMilestone::Halfway, input));
+                    }
+                    if config.almost_ready && !*almost_ready_sent && progress >= 0.9 {
+                        *almost_ready_sent = true;
+                        events.push(event(SpaHeatMilestone::AlmostReady, input));
+                    }
+                }
+            }
+
+            if config.at_temp && !*at_temp_sent && input.current_temp >= input.target_temp {
+                *at_temp_sent = true;
+                events.push(event(SpaHeatMilestone::AtTemp, input));
+                *state = SpaHeatNotificationState::Maintaining {
+                    setpoint: input.target_temp,
+                };
+            }
+
+            events
+        }
+
+        SpaHeatNotificationState::Maintaining { setpoint } => {
+            let prev_setpoint = *setpoint;
+            // Always track current setpoint so future raises are detected
+            // relative to the latest value, not the historical max.
+            *setpoint = input.target_temp;
+
+            if input.target_temp > prev_setpoint {
+                // Setpoint raised — new heating intent
+                let mut heating_started_sent = false;
+                let mut events = Vec::new();
+                if config.heating_started {
+                    heating_started_sent = true;
+                    events.push(event(SpaHeatMilestone::HeatingStarted, input));
+                }
+                *state = SpaHeatNotificationState::Heating {
+                    heating_started_sent,
+                    estimate_ready_sent: false,
+                    halfway_sent: false,
+                    almost_ready_sent: false,
+                    at_temp_sent: false,
+                    trusted_session_id: None,
+                };
+                events
+            } else {
+                // Heater cycling or setpoint lowered — silent
+                Vec::new()
+            }
+        }
+    }
 }
 
 pub fn notification_text(event: &SpaHeatNotificationEvent, temp_unit: &str) -> (String, String) {
@@ -194,6 +269,8 @@ mod tests {
 
     fn base_input() -> SpaHeatNotificationInput {
         SpaHeatNotificationInput {
+            spa_on: true,
+            heat_mode_off: false,
             heating_active: true,
             current_temp: 92,
             target_temp: 104,
@@ -290,6 +367,7 @@ mod tests {
         let at_temp = evaluate_spa_heat_notifications(&config, &input, &mut state);
         assert!(at_temp.iter().any(|event| event.milestone == SpaHeatMilestone::AtTemp));
 
+        // After AtTemp, state should be Maintaining — reheat cycles are silent
         let repeated = evaluate_spa_heat_notifications(&config, &input, &mut state);
         assert!(repeated.is_empty());
     }
@@ -318,6 +396,242 @@ mod tests {
         input.trusted_session_current_temp_f = Some(104.0);
         let at_temp = evaluate_spa_heat_notifications(&config, &input, &mut state);
         assert!(at_temp.iter().any(|event| event.milestone == SpaHeatMilestone::AtTemp));
+    }
+
+    #[test]
+    fn reheat_cycle_is_silent_in_maintaining() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Heat up to AtTemp
+        evaluate_spa_heat_notifications(&config, &input, &mut state); // HeatingStarted
+        input.current_temp = 104;
+        let at_temp = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(at_temp.iter().any(|e| e.milestone == SpaHeatMilestone::AtTemp));
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+
+        // Heater cycles off (spa still on)
+        input.heating_active = false;
+        input.current_temp = 102;
+        let silent = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(silent.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+
+        // Heater kicks back on — still silent
+        input.heating_active = true;
+        let still_silent = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(still_silent.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+    }
+
+    #[test]
+    fn setpoint_raise_in_maintaining_starts_new_heating() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+        input.target_temp = 102;
+
+        // Heat up to AtTemp at 102
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        input.current_temp = 102;
+        evaluate_spa_heat_notifications(&config, &input, &mut state); // AtTemp
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 102 }));
+
+        // Raise setpoint to 106
+        input.target_temp = 106;
+        input.current_temp = 102;
+        input.heating_active = true;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].milestone, SpaHeatMilestone::HeatingStarted);
+        assert!(matches!(state, SpaHeatNotificationState::Heating { .. }));
+    }
+
+    #[test]
+    fn setpoint_lower_in_maintaining_stays_silent() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Heat up to AtTemp at 104
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        input.current_temp = 104;
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 104 }));
+
+        // Lower setpoint to 100
+        input.target_temp = 100;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+    }
+
+    #[test]
+    fn spa_off_resets_to_idle_then_fresh_heating() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Heat up to Maintaining
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        input.current_temp = 104;
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+
+        // Spa turned off
+        input.spa_on = false;
+        input.heating_active = false;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Idle));
+
+        // Spa turned back on — fresh HeatingStarted
+        input.spa_on = true;
+        input.heating_active = true;
+        input.current_temp = 92;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].milestone, SpaHeatMilestone::HeatingStarted);
+    }
+
+    #[test]
+    fn heater_off_during_heating_pauses_milestones() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Start heating
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(matches!(state, SpaHeatNotificationState::Heating { .. }));
+
+        // Heater cycles off briefly (spa still on)
+        input.heating_active = false;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.is_empty());
+        // Should stay in Heating, not reset
+        assert!(matches!(state, SpaHeatNotificationState::Heating { .. }));
+
+        // Heater kicks back on — no duplicate HeatingStarted
+        input.heating_active = true;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(!events.iter().any(|e| e.milestone == SpaHeatMilestone::HeatingStarted));
+    }
+
+    #[test]
+    fn setpoint_lowered_during_heating_adjusts_goal() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+        // Start at 80, target 104
+        input.current_temp = 80;
+        input.target_temp = 104;
+
+        // HeatingStarted fires
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert_eq!(events[0].milestone, SpaHeatMilestone::HeatingStarted);
+
+        // Heating progresses to 90
+        input.current_temp = 90;
+        input.minutes_remaining = Some(30);
+        input.trusted_session_id = Some(1);
+        input.trusted_session_start_temp_f = Some(80.0);
+        input.trusted_session_current_temp_f = Some(90.0);
+        input.trusted_session_target_temp_f = Some(104.0);
+        evaluate_spa_heat_notifications(&config, &input, &mut state); // EstimateReady
+
+        // User lowers setpoint to 102 — new session from heat estimator
+        input.target_temp = 102;
+        input.trusted_session_id = Some(2);
+        input.trusted_session_target_temp_f = Some(102.0);
+        input.trusted_session_start_temp_f = Some(80.0);
+        input.trusted_session_current_temp_f = Some(90.0);
+
+        // Should NOT fire HeatingStarted again — stays in Heating
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(!events.iter().any(|e| e.milestone == SpaHeatMilestone::HeatingStarted));
+        assert!(matches!(state, SpaHeatNotificationState::Heating { .. }));
+
+        // AtTemp fires at 102, not 104
+        input.current_temp = 102;
+        input.trusted_session_current_temp_f = Some(102.0);
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.iter().any(|e| e.milestone == SpaHeatMilestone::AtTemp));
+        assert_eq!(events.iter().find(|e| e.milestone == SpaHeatMilestone::AtTemp).unwrap().target_temp, 102);
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 102 }));
+    }
+
+    #[test]
+    fn setpoint_lowered_below_current_temp_during_heating_fires_at_temp() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+        input.current_temp = 95;
+        input.target_temp = 104;
+
+        // HeatingStarted
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+
+        // User lowers setpoint to 90 — already past the new goal
+        input.target_temp = 90;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.iter().any(|e| e.milestone == SpaHeatMilestone::AtTemp));
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 90 }));
+    }
+
+    #[test]
+    fn heat_mode_off_resets_to_idle() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Heat up to Maintaining
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        input.current_temp = 104;
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { .. }));
+
+        // User turns heat mode off (spa circuit still on)
+        input.heat_mode_off = true;
+        input.heating_active = false;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Idle));
+
+        // User turns heat mode back on — fresh HeatingStarted
+        input.heat_mode_off = false;
+        input.heating_active = true;
+        input.current_temp = 100;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].milestone, SpaHeatMilestone::HeatingStarted);
+    }
+
+    #[test]
+    fn setpoint_lower_then_raise_in_maintaining_triggers_heating() {
+        let config = base_config();
+        let mut state = SpaHeatNotificationState::default();
+        let mut input = base_input();
+
+        // Heat up to AtTemp at 104
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        input.current_temp = 104;
+        evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 104 }));
+
+        // Lower setpoint to 100 — silent, but stored setpoint updates
+        input.target_temp = 100;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert!(events.is_empty());
+        assert!(matches!(state, SpaHeatNotificationState::Maintaining { setpoint: 100 }));
+
+        // Raise setpoint to 102 — this is above 100, so new heating intent
+        input.target_temp = 102;
+        input.heating_active = true;
+        let events = evaluate_spa_heat_notifications(&config, &input, &mut state);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].milestone, SpaHeatMilestone::HeatingStarted);
+        assert!(matches!(state, SpaHeatNotificationState::Heating { .. }));
     }
 
     #[test]

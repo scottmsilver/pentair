@@ -515,6 +515,8 @@ impl HeatEstimator {
         };
 
         let input = SpaHeatNotificationInput {
+            spa_on: spa.on,
+            heat_mode_off: spa.heat_mode == "off",
             heating_active: spa.on && spa.heating != "off" && spa.heating != "unknown",
             current_temp: spa.temperature,
             target_temp: spa.setpoint,

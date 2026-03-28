@@ -102,7 +102,7 @@ pub struct SpaHeatNotificationsConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HeatingConfig {
-    #[serde(default)]
+    #[serde(default = "default_heating_enabled")]
     pub enabled: bool,
     #[serde(default = "default_heating_history_path")]
     pub history_path: String,
@@ -180,6 +180,9 @@ fn default_minimum_temp_rise_f() -> f64 {
 fn default_shared_equipment_temp_warmup_seconds() -> u64 {
     120
 }
+fn default_heating_enabled() -> bool {
+    true
+}
 fn default_notification_enabled() -> bool {
     true
 }
@@ -219,7 +222,7 @@ impl Default for Config {
 impl Default for HeatingConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             history_path: default_heating_history_path(),
             sample_window_minutes: default_sample_window_minutes(),
             minimum_runtime_minutes: default_minimum_runtime_minutes(),
