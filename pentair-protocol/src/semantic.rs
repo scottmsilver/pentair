@@ -23,6 +23,10 @@ pub struct PoolSystem {
     pub auxiliaries: Vec<AuxState>,
     pub pump: Option<PumpInfo>,
     pub system: SystemInfo,
+    /// True when there are user-initiated things to turn off (spa on or lights on).
+    /// Used by UIs to show/hide a "goodnight" button.
+    #[serde(default)]
+    pub goodnight_available: bool,
 }
 
 /// Server-side estimate of time remaining to reach setpoint.
@@ -504,6 +508,9 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
         pool_spa_shared_pump: pool_spa_shared,
     };
 
+    let goodnight_available = spa_state.as_ref().is_some_and(|s| s.on)
+        || light_state.as_ref().is_some_and(|l| l.on);
+
     let pool_system = PoolSystem {
         pool: pool_state,
         spa: spa_state,
@@ -511,6 +518,7 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
         auxiliaries,
         pump: primary_pump,
         system,
+        goodnight_available,
     };
 
     (pool_system, circuit_map)

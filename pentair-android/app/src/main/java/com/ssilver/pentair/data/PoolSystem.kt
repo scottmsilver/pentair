@@ -9,7 +9,8 @@ data class PoolSystem(
     val lights: LightState?,
     val auxiliaries: List<AuxState>,
     val pump: PumpInfo?,
-    val system: SystemInfo
+    val system: SystemInfo,
+    val goodnight_available: Boolean = false,
 )
 
 @JsonClass(generateAdapter = true)

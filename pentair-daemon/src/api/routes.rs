@@ -61,6 +61,7 @@ pub fn router(
         .route("/api/lights/mode", post(lights_mode))
         .route("/api/auxiliary/{id}/on", post(aux_on))
         .route("/api/auxiliary/{id}/off", post(aux_off))
+        .route("/api/goodnight", post(goodnight))
         // ── Scenes API ──────────────────────────────────────────────
         .route("/api/scenes", get(list_scenes))
         .route("/api/scenes/{name}", post(trigger_scene))
@@ -611,6 +612,48 @@ async fn aux_on(State(state): State<AppState>, Path(id): Path<String>) -> Json<s
 
 async fn aux_off(State(state): State<AppState>, Path(id): Path<String>) -> Json<serde_json::Value> {
     set_semantic_circuit(&state, &id, false).await
+}
+
+// ── Goodnight (turn off user-initiated things) ───────────────────────────
+
+async fn goodnight(State(state): State<AppState>) -> Json<serde_json::Value> {
+    // Acquire the scene execution lock to prevent interleaving with other commands
+    let _guard = state.scenes.exec_lock.lock().await;
+
+    let mut errors = Vec::new();
+
+    // Only turn off devices that exist and are on
+    let (spa_on, lights_on) = {
+        let s = state.shared.read().await;
+        match s.pool_system() {
+            Some(ps) => (
+                ps.spa.as_ref().is_some_and(|s| s.on),
+                ps.lights.as_ref().is_some_and(|l| l.on),
+            ),
+            None => (false, false),
+        }
+    };
+
+    if spa_on {
+        let _ = set_semantic_circuit(&state, "jets", false).await;
+        let result = set_semantic_circuit(&state, "spa", false).await;
+        if !result.0.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            errors.push("spa");
+        }
+    }
+
+    if lights_on {
+        let result = set_semantic_circuit(&state, "lights", false).await;
+        if !result.0.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            errors.push("lights");
+        }
+    }
+
+    if errors.is_empty() {
+        Json(serde_json::json!({"ok": true}))
+    } else {
+        Json(serde_json::json!({"ok": false, "error": format!("failed to turn off: {}", errors.join(", "))}))
+    }
 }
 
 // ── Matter commissioning ─────────────────────────────────────────────────

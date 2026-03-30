@@ -1,5 +1,8 @@
 package com.ssilver.pentair.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Nightlight
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -79,6 +83,8 @@ fun PoolModernScreen(
     connectionState: ConnectionState,
     spaState: String,
     onRefresh: () -> Unit,
+    goodnightAvailable: Boolean,
+    onGoodnight: () -> Unit,
     onShowSettings: () -> Unit,
     onPoolSetpointClick: () -> Unit,
     onSpaStateChange: (String) -> Unit,
@@ -103,6 +109,18 @@ fun PoolModernScreen(
                     actionIconContentColor = MaterialTheme.colorScheme.onBackground,
                 ),
                 actions = {
+                    AnimatedVisibility(
+                        visible = goodnightAvailable,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                    ) {
+                        IconButton(onClick = onGoodnight) {
+                            Icon(
+                                imageVector = Icons.Outlined.Nightlight,
+                                contentDescription = "Goodnight",
+                            )
+                        }
+                    }
                     IconButton(onClick = onShowSettings) {
                         BadgedBox(
                             badge = {

@@ -54,6 +54,9 @@ interface PoolApiClient {
     @POST("/api/auxiliary/{id}/off")
     suspend fun auxOff(@Path("id") id: String): ApiResponse
 
+    @POST("/api/goodnight")
+    suspend fun goodnight(): ApiResponse
+
     @POST("/api/devices/register")
     suspend fun registerDevice(@Body body: Map<String, String>): ApiResponse
 }

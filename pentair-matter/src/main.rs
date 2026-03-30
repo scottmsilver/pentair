@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 mod clusters;
 mod config;
 mod convert;
@@ -120,6 +122,7 @@ async fn dispatch_commands(cmd_rx: std::sync::mpsc::Receiver<Command>, daemon: D
                     Command::JetsOff => daemon.post("/api/spa/jets/off", None).await,
                     Command::LightsOn => daemon.post("/api/lights/on", None).await,
                     Command::LightsOff => daemon.post("/api/lights/off", None).await,
+                    Command::Goodnight => daemon.post("/api/goodnight", None).await,
                     Command::SetSpaSetpoint(f) => {
                         daemon
                             .post(

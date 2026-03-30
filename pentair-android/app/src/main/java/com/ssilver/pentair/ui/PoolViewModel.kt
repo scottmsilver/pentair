@@ -83,5 +83,7 @@ class PoolViewModel @Inject constructor(
 
     fun setSetpoint(body: String, temp: Int) = viewModelScope.launch { repository.setSetpoint(body, temp) }
 
+    fun goodnight() = viewModelScope.launch { repository.goodnight() }
+
     fun toggleAux(id: String, on: Boolean) = viewModelScope.launch { repository.toggleAux(id, on) }
 }

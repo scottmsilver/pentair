@@ -63,12 +63,23 @@ struct ContentView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showsSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
+                    HStack(spacing: 16) {
+                        if viewModel.system?.goodnightAvailable == true {
+                            Button {
+                                viewModel.goodnight()
+                            } label: {
+                                Image(systemName: "moon.fill")
+                            }
+                            .tint(.white)
+                        }
+
+                        Button {
+                            showsSettings = true
+                        } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .tint(.white)
                     }
-                    .tint(.white)
                 }
 
                 ToolbarItem(placement: .principal) {

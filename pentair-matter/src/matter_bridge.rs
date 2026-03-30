@@ -1,10 +1,11 @@
 //! Matter bridge for Pentair pool system.
 //!
 //! Runs the rs-matter stack on a dedicated OS thread (using `futures_lite::future::block_on`),
-//! exposing three bridged endpoints:
+//! exposing four bridged endpoints:
 //!   - Endpoint 2: Spa (OnOff)
 //!   - Endpoint 3: Jets (OnOff)
 //!   - Endpoint 4: Lights (OnOff)
+//!   - Endpoint 5: Goodnight (OnOff, momentary)
 //!
 //! Endpoint 0 = root node, Endpoint 1 = aggregator.
 //!
@@ -86,6 +87,7 @@ pub enum Command {
     JetsOff,
     LightsOn,
     LightsOff,
+    Goodnight,
     SetSpaSetpoint(i32), // Fahrenheit
     SetLightMode(String),
 }
@@ -224,7 +226,7 @@ const LIGHTS_MODE_SELECT_CLUSTER: Cluster<'static> = mode_select_decl::FULL_CLUS
     .with_attrs(with!(required))
     .with_cmds(with!(mode_select_decl::CommandId::ChangeToMode));
 
-/// Endpoint 0 = root, 1 = aggregator, 2 = spa, 3 = jets, 4 = lights
+/// Endpoint 0 = root, 1 = aggregator, 2 = spa, 3 = jets, 4 = lights, 5 = goodnight
 const NODE: Node<'static> = Node {
     id: 0,
     endpoints: &[
@@ -267,6 +269,16 @@ const NODE: Node<'static> = Node {
                 LIGHTS_MODE_SELECT_CLUSTER
             ),
         },
+        // Goodnight (OnOff + Bridged)
+        Endpoint {
+            id: 5,
+            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT, DEV_TYPE_BRIDGED_NODE),
+            clusters: clusters!(
+                desc::DescHandler::CLUSTER,
+                BridgedHandler::CLUSTER,
+                PentairOnOffHooks::CLUSTER
+            ),
+        },
     ],
 };
 
@@ -280,6 +292,7 @@ enum DeviceRole {
     Spa,
     Jets,
     Lights,
+    Goodnight,
 }
 
 /// OnOff hooks that read state from SharedState and send commands via mpsc.
@@ -299,6 +312,7 @@ impl PentairOnOffHooks {
                 DeviceRole::Spa => s.spa_on,
                 DeviceRole::Jets => s.jets_on,
                 DeviceRole::Lights => s.lights_on,
+                DeviceRole::Goodnight => false, // momentary action, always off
             };
             (on, shared.generation.load(Ordering::Acquire))
         };
@@ -340,6 +354,8 @@ impl OnOffHooks for PentairOnOffHooks {
             (DeviceRole::Jets, false) => Command::JetsOff,
             (DeviceRole::Lights, true) => Command::LightsOn,
             (DeviceRole::Lights, false) => Command::LightsOff,
+            (DeviceRole::Goodnight, true) => Command::Goodnight,
+            (DeviceRole::Goodnight, false) => return, // no-op
         };
         if let Err(e) = self.cmd_tx.send(cmd) {
             tracing::error!(role = ?self.role, error = %e, "failed to send command to daemon");
@@ -371,6 +387,7 @@ impl OnOffHooks for PentairOnOffHooks {
                         DeviceRole::Spa => s.spa_on,
                         DeviceRole::Jets => s.jets_on,
                         DeviceRole::Lights => s.lights_on,
+                        DeviceRole::Goodnight => false, // momentary action, always off
                     }
                 };
                 if new_on != self.on.get() {
@@ -451,6 +468,7 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
     jets_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
     lights_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
     lights_mode_select: &'a mode_select_decl::HandlerAdaptor<LightModeSelectHandler>,
+    goodnight_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
 ) -> impl AsyncMetadata + AsyncHandler + 'a {
     (
         NODE,
@@ -515,6 +533,19 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
                     .chain(
                         EpClMatcher::new(Some(4), Some(LIGHTS_MODE_SELECT_CLUSTER.id)),
                         Async(lights_mode_select),
+                    )
+                    // Goodnight (ep 5)
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(desc::DescHandler::CLUSTER.id)),
+                        Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(BridgedHandler::CLUSTER.id)),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(PentairOnOffHooks::CLUSTER.id)),
+                        on_off::HandlerAsyncAdaptor(goodnight_on_off),
                     ),
             ),
         ),
@@ -577,9 +608,16 @@ fn run_matter(
     let lights_mode_select = LightModeSelectHandler::new(
         Dataver::new_rand(&mut rng),
         mode_map,
-        shared,
-        cmd_tx,
+        shared.clone(),
+        cmd_tx.clone(),
     ).adapt();
+
+    let goodnight_hooks = PentairOnOffHooks::new(DeviceRole::Goodnight, shared, cmd_tx);
+    let goodnight_on_off = on_off::OnOffHandler::new_standalone(
+        Dataver::new_rand(&mut rng),
+        5,
+        goodnight_hooks,
+    );
 
     let dm = DataModel::new(
         &matter,
@@ -587,7 +625,7 @@ fn run_matter(
         &buffers,
         &subscriptions,
         Some(&events),
-        dm_handler(rng, &spa_on_off, &spa_thermostat, &jets_on_off, &lights_on_off, &lights_mode_select),
+        dm_handler(rng, &spa_on_off, &spa_thermostat, &jets_on_off, &lights_on_off, &lights_mode_select, &goodnight_on_off),
     );
 
     let responder = DefaultResponder::new(&dm);
@@ -619,7 +657,7 @@ fn run_matter(
     tracing::info!(
         port = MATTER_PORT,
         discriminator = discriminator,
-        "Matter bridge running (3 endpoints: spa, jets, lights)"
+        "Matter bridge running (4 endpoints: spa, jets, lights, goodnight)"
     );
 
     let all = select4(

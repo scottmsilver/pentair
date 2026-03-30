@@ -110,6 +110,10 @@ struct PoolAPI {
         }
     }
 
+    func goodnight() async throws {
+        try await post("/api/goodnight")
+    }
+
     func webSocketURL() -> URL? {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             return nil

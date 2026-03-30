@@ -828,6 +828,10 @@ struct HeatingStatusSummary {
 }
 
 extension PoolSystem {
+    var goodnightAvailable: Bool {
+        spa?.on == true || lights?.on == true
+    }
+
     func heatingStatus(for body: HeatingBody) -> HeatingStatusSummary? {
         switch body {
         case .pool:

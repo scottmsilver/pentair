@@ -204,14 +204,16 @@ body {
 .aux.on { background: rgba(56,189,248,0.12); border-color: rgba(56,189,248,0.3); color: var(--accent); }
 
 /* ── Settings gear ───────────────────────── */
-.gear-btn {
+.gear-btn, .goodnight-btn {
   width: 32px; height: 32px; border-radius: 50%;
   background: none; border: none; cursor: pointer;
   color: var(--text-dim); font-size: 18px;
   display: flex; align-items: center; justify-content: center;
-  transition: color 0.2s;
+  transition: color 0.2s, opacity 0.3s;
 }
-.gear-btn:active { color: var(--text-bright); }
+.gear-btn:active, .goodnight-btn:active { color: var(--text-bright); }
+.goodnight-btn { display: none; }
+.goodnight-btn.visible { display: flex; }
 
 /* ── Tech drawer ────────────────────────── */
 .tech-drawer {
@@ -290,7 +292,10 @@ body {
 
 <div class="hdr">
   <div></div>
-  <button class="gear-btn" onclick="document.getElementById('techDraw').classList.toggle('open')">⚙</button>
+  <div style="display:flex;gap:4px;align-items:center">
+    <button class="goodnight-btn" id="goodnightBtn" onclick="doGoodnight()">🌙</button>
+    <button class="gear-btn" onclick="document.getElementById('techDraw').classList.toggle('open')">⚙</button>
+  </div>
 </div>
 
 <div class="deck"><div class="deck-inner">
@@ -443,6 +448,12 @@ function render(){
     document.getElementById('tdW').textContent=S.pump.running?S.pump.watts+'W':'—';
     document.getElementById('tdGpm').textContent=S.pump.running?S.pump.gpm+' GPM':'—';
   }
+
+  document.getElementById('goodnightBtn').classList.toggle('visible',!!S.goodnight_available);
+}
+
+async function doGoodnight(){
+  await post('/api/goodnight');
 }
 
 function getModeColor(m){

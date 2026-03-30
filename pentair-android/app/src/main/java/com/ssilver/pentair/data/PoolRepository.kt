@@ -455,6 +455,33 @@ class PoolRepository @Inject constructor(
         refresh()
     }
 
+    suspend fun goodnight() {
+        // Clear all pending mutations — goodnight overrides any in-flight
+        // commands (e.g., a "set party" that hasn't settled yet).
+        _pendingChanges.clear()
+        applyOptimistic(
+            description = "Goodnight",
+            mutate = { sys ->
+                sys.copy(
+                    spa = sys.spa?.copy(on = false, active = false, accessories = sys.spa.accessories.mapValues { false }),
+                    lights = sys.lights?.copy(on = false, mode = null),
+                    goodnight_available = false,
+                )
+            },
+            verify = { sys -> sys.spa?.on != true && sys.lights?.on != true },
+        )
+
+        try {
+            api?.goodnight()
+        } catch (e: Exception) {
+            _rejections.tryEmit("Goodnight failed: ${e.message}")
+            try { refresh() } catch (_: Exception) {}
+            return
+        }
+        delay(1500)
+        refresh()
+    }
+
     suspend fun toggleAux(id: String, on: Boolean) {
         applyOptimistic(
             description = "${id} ${if (on) "on" else "off"}",

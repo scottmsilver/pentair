@@ -131,6 +131,8 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
                 sharedPump = system?.system?.pool_spa_shared_pump == true,
                 connectionState = connectionState,
                 spaState = spaState,
+                goodnightAvailable = system?.goodnight_available == true,
+                onGoodnight = viewModel::goodnight,
                 onRefresh = viewModel::refresh,
                 onShowSettings = { showSettings = true },
                 onPoolSetpointClick = { showPoolSetpoint = true },

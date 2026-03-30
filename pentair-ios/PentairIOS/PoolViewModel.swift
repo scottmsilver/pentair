@@ -308,6 +308,28 @@ final class PoolViewModel: ObservableObject {
         }
     }
 
+    func goodnight() {
+        recordDiagnostic("command", "Goodnight")
+        // Clear all pending mutations — goodnight overrides any in-flight
+        // commands (e.g., a "set party" that hasn't settled yet).
+        pendingMutations.removeAll()
+        let pendingMutationID = applyOptimistic(
+            description: "Goodnight",
+            verify: { current in
+                current.spa?.on != true && current.lights?.on != true
+            }
+        ) { current in
+            current.updating(
+                spa: current.spa?.updating(on: false, accessories: current.spa?.accessories.mapValues { _ in false }),
+                lights: current.lights?.updating(on: false)
+            )
+        }
+
+        Task {
+            await sendCommand(path: "/api/goodnight", pendingMutationID: pendingMutationID)
+        }
+    }
+
     func spaMode(for spa: SpaState?) -> SpaMode {
         guard let spa else {
             return .off

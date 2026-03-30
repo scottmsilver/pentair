@@ -1464,6 +1464,7 @@ mod tests {
                 freeze_protection: false,
                 pool_spa_shared_pump: true,
             },
+            goodnight_available: spa_on,
         }
     }
 
