@@ -1,43 +1,62 @@
-# Pentair Pool Controller
+<p align="center"><img src=".github/assets/showcase/hero.png" alt="Pentair Pool Controller" width="100%"></p>
 
-A complete smart pool control platform built on the Pentair ScreenLogic IP protocol. Control your pool, spa, lights, heater, and chlorinator from your phone, Google Home, or command line.
+<h1 align="center">Pentair Pool Controller</h1>
 
-**What it does:** Replaces the Pentair ScreenLogic app with a self-hosted system — a Rust daemon on your LAN that talks to the ScreenLogic adapter, plus native Android and iOS apps with real-time status, one-tap controls, and push notifications when your spa is ready.
+<p align="center">
+  <img src="https://img.shields.io/badge/tests-209_passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/rust-workspace-blue?logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/matter-Google_Home-orange?logo=google-home" alt="Matter">
+  <img src="https://img.shields.io/badge/platforms-iOS_%7C_Android_%7C_Web-blueviolet" alt="Platforms">
+</p>
 
-**Tested on:** IntelliTouch controller, IntelliFlow VS pump, IntelliBrite lights, firmware 5.2 Build 738.0.
+<p align="center">
+  A full-stack smart pool controller built from a reverse-engineered wire protocol. One Rust daemon talks to your Pentair hardware, serves a web dashboard, powers native mobile apps, and bridges to Google Home via Matter.
+</p>
+
+---
+
+<h3 align="center">One scenario. Every surface.</h3>
+
+<p align="center">
+  <img src=".github/assets/showcase/ios-spa-heating.png" alt="iOS app showing spa heating to 104" height="500">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src=".github/assets/showcase/web-dashboard.png" alt="Web dashboard" height="320">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src=".github/assets/showcase/android-spa-heating.png" alt="Android app showing spa heating to 104" height="480">
+</p>
+
+<p align="center"><em>Tap "warm the spa to 104" on any device. Watch it heat up in real time. Get a notification when it's ready.</em></p>
+
+<!-- TODO: Add GIF demo once captured -->
+<!-- <p align="center"><img src=".github/assets/showcase/spa-flow.gif" alt="Spa heating flow demo" width="600"></p> -->
+
+## What it does
+
+|  | Feature | Details |
+|--|---------|---------|
+| **Protocol** | Reverse-engineered wire protocol | Binary encode/decode, semantic model, zero vendor SDK. Tested against 24 captured packet fixtures. |
+| **Daemon** | REST + WebSocket server | Auto-discovers your adapter via UDP broadcast. Semantic API, embedded web UI, smart behaviors (jets auto-enable spa, spa-off kills jets). |
+| **Mobile** | Native iOS + Android apps | SwiftUI and Jetpack Compose. Real-time updates via WebSocket. Push notifications when your spa is ready, with heating ETA. |
+| **Google Home** | Matter bridge sidecar | Spa thermostat, jets, 12 IntelliBrite light modes. "Hey Google, warm the spa." Zero daemon changes needed. |
 
 ## Architecture
 
-```
-  ScreenLogic Adapter (192.168.1.x:80)
-         │
-         │  TCP (ScreenLogic protocol)
-         │
-  pentair-daemon (Rust, runs on your LAN)
-    ├── REST API + WebSocket
-    ├── mDNS discovery (_pentair._tcp)
-    ├── State cache + push subscriptions
-    ├── Heating ETA estimation
-    └── FCM push notifications
-         │
-    ┌────┼────────────┐
-    │    │             │
-  CLI  Android       iOS
-       (Kotlin)    (SwiftUI)
+```mermaid
+graph TD
+    HW["ScreenLogic Adapter<br/>(TCP, proprietary protocol)"] -->|ScreenLogic TCP| CLIENT[pentair-client]
+    PROTO[pentair-protocol<br/>encode/decode/semantic] --> CLIENT
+    CLIENT --> DAEMON[pentair-daemon<br/>REST + WebSocket + Web UI]
+    DAEMON -->|REST + WS| WEB["Web UI"]
+    DAEMON -->|REST + WS| IOS["iOS App<br/>(SwiftUI)"]
+    DAEMON -->|REST + WS| ANDROID["Android App<br/>(Compose)"]
+    DAEMON -->|REST + WS| MATTER["pentair-matter<br/>(Matter bridge)"]
+    MATTER -->|Matter| GOOGLE["Google Home"]
+    DAEMON -->|HTTP API| CLI_D["pentair-cli<br/>(daemon mode)"]
+    HW -->|ScreenLogic TCP| CLI_DIRECT["pentair-cli<br/>(direct mode)"]
+    PROTO --> CLI_DIRECT
 ```
 
-## Repo Structure
-
-| Directory | Description |
-|-----------|-------------|
-| `pentair-protocol/` | Wire protocol: types, encode/decode, semantic model (no IO) |
-| `pentair-client/` | Async TCP/UDP client (tokio) |
-| `pentair-daemon/` | Long-running service: REST API, WebSocket, web UI, heating estimator, push notifications |
-| `pentair-cli/` | Command-line tool (direct to adapter or via daemon) |
-| `pentair-android/` | Android app (Kotlin + Jetpack Compose) |
-| `pentair-ios/` | iOS app (SwiftUI) |
-| `docs/` | Protocol reference, API spec, design docs |
-| `test-fixtures/` | 24 binary captures from live hardware |
+**Tested on:** IntelliTouch controller, IntelliFlow VS pump, IntelliBrite lights, firmware 5.2 Build 738.0.
 
 ## Quick Start
 
@@ -78,27 +97,19 @@ xcodebuild -project PentairIOS.xcodeproj -scheme PentairIOS \
   -destination "platform=iOS Simulator,name=iPhone 17 Pro" build
 ```
 
-## Setup After Cloning
+## Repo Structure
 
-### Firebase config (required for mobile apps)
-
-Download Firebase config files from the [Firebase Console](https://console.firebase.google.com) -> Project Settings -> Your Apps:
-
-- **Android**: Download `google-services.json` -> place at `pentair-android/app/google-services.json`
-- **iOS**: Download `GoogleService-Info.plist` -> place at `pentair-ios/PentairIOS/GoogleService-Info.plist`
-
-These files are gitignored to keep API keys out of the public repo.
-
-### Daemon FCM key (required for push notifications)
-
-1. Firebase Console -> Project Settings -> Service Accounts -> Generate New Private Key
-2. Save to `~/.pentair/firebase/<project-id>-pentair-daemon-fcm.json`
-3. Reference in your daemon config:
-   ```toml
-   [fcm]
-   project_id = "your-project-id"
-   service_account = "~/.pentair/firebase/your-project-id-pentair-daemon-fcm.json"
-   ```
+| Directory | Description |
+|-----------|-------------|
+| `pentair-protocol/` | Wire protocol: types, encode/decode, semantic model (no IO) |
+| `pentair-client/` | Async TCP/UDP client (tokio) |
+| `pentair-daemon/` | Long-running service: REST API, WebSocket, web UI, heating estimator, push notifications |
+| `pentair-cli/` | Command-line tool (direct to adapter or via daemon) |
+| `pentair-matter/` | Matter bridge sidecar for Google Home |
+| `pentair-android/` | Android app (Kotlin + Jetpack Compose) |
+| `pentair-ios/` | iOS app (SwiftUI) |
+| `docs/` | Protocol reference, API spec, design docs |
+| `test-fixtures/` | 24 binary captures from live hardware |
 
 ## Semantic API
 
@@ -132,12 +143,34 @@ The daemon sends FCM push notifications for spa heating milestones:
 - **Almost Ready** -- 90% of the way
 - **At Temperature** -- spa has reached the setpoint
 
-Heating ETA is computed server-side by combining configured heater specs, learned rates from prior sessions, and live observed data. The daemon also manages temperature trust for shared-equipment systems where sensor readings can be stale.
+Heating ETA is computed server-side by combining configured heater specs, learned rates from prior sessions, and live observed data.
+
+## Setup After Cloning
+
+### Firebase config (required for mobile apps)
+
+Download Firebase config files from the [Firebase Console](https://console.firebase.google.com) -> Project Settings -> Your Apps:
+
+- **Android**: Download `google-services.json` -> place at `pentair-android/app/google-services.json`
+- **iOS**: Download `GoogleService-Info.plist` -> place at `pentair-ios/PentairIOS/GoogleService-Info.plist`
+
+These files are gitignored to keep API keys out of the public repo.
+
+### Daemon FCM key (required for push notifications)
+
+1. Firebase Console -> Project Settings -> Service Accounts -> Generate New Private Key
+2. Save to `~/.pentair/firebase/<project-id>-pentair-daemon-fcm.json`
+3. Reference in your daemon config:
+   ```toml
+   [fcm]
+   project_id = "your-project-id"
+   service_account = "~/.pentair/firebase/your-project-id-pentair-daemon-fcm.json"
+   ```
 
 ## Testing
 
 ```bash
-cargo test --workspace                # All unit tests (81 daemon + 22 protocol + 2 client)
+cargo test --workspace                # All unit tests (209 passing)
 
 # Live hardware tests (require adapter on LAN)
 PENTAIR_HOST=192.168.1.89 cargo test --test live_read -p pentair-client -- --ignored --test-threads=1
