@@ -189,9 +189,14 @@ body {
 }
 .cswatch.off-swatch {
   background: rgba(255,255,255,0.06);
-  border: 3px solid rgba(255,255,255,0.2);
+  border: 3px solid rgba(255,255,255,0.12);
   display: flex; align-items: center; justify-content: center;
   font-size: 18px; color: rgba(255,255,255,0.45);
+}
+.cswatch.off-swatch.on {
+  border-color: white;
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.8);
 }
 .cswatch[data-mode="swim"]      { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
 .cswatch[data-mode="party"]     { background: conic-gradient(#ef4444, #eab308, #22c55e, #3b82f6, #a855f7, #ef4444); }
@@ -636,6 +641,8 @@ function render() {
     grid.querySelectorAll('.cswatch[data-mode]').forEach(d => {
       d.classList.toggle('on', S.lights.on && d.dataset.mode === S.lights.mode);
     });
+    const offSwatch = grid.querySelector('.off-swatch');
+    if (offSwatch) offSwatch.classList.toggle('on', !S.lights.on);
   }
 
   // Auxiliaries
