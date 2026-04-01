@@ -83,6 +83,26 @@ body {
 .card-status.on { color: var(--teal); }
 .card-status.heating { color: var(--warm); }
 
+/* ── Heat estimate ──────────────────────── */
+.heat-info {
+  font-size: 13px; color: var(--warm); font-weight: 500;
+  margin-top: 4px; margin-bottom: 4px;
+  display: none;
+}
+.heat-info.visible { display: block; }
+.heat-progress {
+  height: 3px; border-radius: 2px;
+  background: rgba(255,255,255,0.06);
+  margin-top: 6px; overflow: hidden;
+  display: none;
+}
+.heat-progress.visible { display: block; }
+.heat-progress-bar {
+  height: 100%; border-radius: 2px;
+  background: var(--warm);
+  transition: width 1s ease;
+}
+
 /* ── Temperature display ────────────────── */
 .temp-row {
   display: flex; align-items: baseline; gap: 8px;
@@ -291,6 +311,8 @@ body {
       <span class="temp-val" id="pT">--<span class="temp-deg">°</span></span>
       <span class="temp-age" id="pAge"></span>
     </div>
+    <div class="heat-info" id="pHeat"></div>
+    <div class="heat-progress" id="pProgress"><div class="heat-progress-bar" id="pProgressBar"></div></div>
     <div class="setpoint-row" onclick="openSet('pool')">
       <span class="setpoint-label">Setpoint</span>
       <span class="setpoint-val"><span id="pS">--°F</span> <span class="setpoint-arrow">›</span></span>
@@ -307,6 +329,8 @@ body {
       <span class="temp-val" id="sT">--<span class="temp-deg">°</span></span>
       <span class="temp-age" id="sAge"></span>
     </div>
+    <div class="heat-info" id="sHeat"></div>
+    <div class="heat-progress" id="sProgress"><div class="heat-progress-bar" id="sProgressBar"></div></div>
     <div class="seg-ctrl" id="spaSeg">
       <button class="seg-btn" data-state="off" onclick="setSpaState('off')">Off</button>
       <button class="seg-btn" data-state="spa" onclick="setSpaState('spa')">Spa</button>
@@ -396,6 +420,51 @@ function connectWs() {
   w.onclose = () => setTimeout(connectWs, 3000);
 }
 
+function timeAgo(unixMs) {
+  if (!unixMs) return '';
+  const sec = Math.floor((Date.now() - unixMs) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  if (sec < 172800) return 'yesterday';
+  return Math.floor(sec / 86400) + 'd ago';
+}
+
+function renderHeatEstimate(prefix, body) {
+  const info = document.getElementById(prefix + 'Heat');
+  const progress = document.getElementById(prefix + 'Progress');
+  const bar = document.getElementById(prefix + 'ProgressBar');
+  const hed = body.heat_estimate_display;
+  const hp = body.spa_heat_progress;
+
+  // Use the display contract: state is ready|pending|unavailable
+  if (hed && hed.state !== 'unavailable' && body.on) {
+    let text = '';
+    if (hed.state === 'ready' && hed.minutes_remaining != null) {
+      text = 'Ready in about ' + hed.minutes_remaining + ' min';
+    } else if (hed.state === 'pending' && hed.reason === 'sensor-warmup') {
+      if (hed.available_in_seconds != null) {
+        text = 'Warming sensor... ' + Math.ceil(hed.available_in_seconds / 60) + 'm';
+      } else {
+        text = 'Warming sensor...';
+      }
+    } else if (hed.state === 'pending') {
+      text = 'Estimating...';
+    }
+    if (text) { info.textContent = text; info.classList.add('visible'); }
+    else { info.classList.remove('visible'); }
+  } else {
+    info.classList.remove('visible');
+  }
+
+  if (hp && hp.active && hp.progress_pct > 0) {
+    bar.style.width = hp.progress_pct + '%';
+    progress.classList.add('visible');
+  } else {
+    progress.classList.remove('visible');
+  }
+}
+
 function render() {
   if (!S) return;
 
@@ -404,10 +473,12 @@ function render() {
 
   // Pool
   if (S.pool) {
-    document.getElementById('pT').innerHTML = S.pool.temperature + '<span class="temp-deg">°</span>';
+    const pTd = S.pool.temperature_display;
+    const pTemp = pTd ? pTd.value : S.pool.temperature;
+    document.getElementById('pT').innerHTML = pTemp + '<span class="temp-deg">°</span>';
     document.getElementById('pS').textContent = S.pool.setpoint + '°F';
     const poolStatus = document.getElementById('poolStatus');
-    if (S.pool.heating !== 'off') {
+    if (S.pool.on && S.pool.heating !== 'off') {
       poolStatus.textContent = 'Heating';
       poolStatus.className = 'card-status heating';
     } else if (S.pool.on) {
@@ -417,17 +488,18 @@ function render() {
       poolStatus.textContent = 'Off';
       poolStatus.className = 'card-status';
     }
-    if (S.pool.temperature_age) {
-      document.getElementById('pAge').textContent = S.pool.temperature_age;
-    }
+    document.getElementById('pAge').textContent = (pTd && pTd.last_reliable_at_unix_ms) ? timeAgo(pTd.last_reliable_at_unix_ms) : '';
+    renderHeatEstimate('p', S.pool);
   }
 
   // Spa
   if (S.spa) {
-    document.getElementById('sT').innerHTML = S.spa.temperature + '<span class="temp-deg">°</span>';
+    const sTd = S.spa.temperature_display;
+    const sTemp = sTd ? sTd.value : S.spa.temperature;
+    document.getElementById('sT').innerHTML = sTemp + '<span class="temp-deg">°</span>';
     document.getElementById('sS').textContent = S.spa.setpoint + '°F';
     const spaStatus = document.getElementById('spaStatus');
-    if (S.spa.heating !== 'off') {
+    if (S.spa.on && S.spa.heating !== 'off') {
       spaStatus.textContent = 'Heating';
       spaStatus.className = 'card-status heating';
     } else if (S.spa.on) {
@@ -437,9 +509,8 @@ function render() {
       spaStatus.textContent = 'Off';
       spaStatus.className = 'card-status';
     }
-    if (S.spa.temperature_age) {
-      document.getElementById('sAge').textContent = S.spa.temperature_age;
-    }
+    document.getElementById('sAge').textContent = (sTd && sTd.last_reliable_at_unix_ms) ? timeAgo(sTd.last_reliable_at_unix_ms) : '';
+    renderHeatEstimate('s', S.spa);
     // Segmented control
     const hasJets = S.spa.accessories && S.spa.accessories.jets !== undefined;
     let spaState = 'off';
@@ -475,7 +546,7 @@ function render() {
       });
     }
     grid.querySelectorAll('.cswatch[data-mode]').forEach(d => {
-      d.classList.toggle('on', d.dataset.mode === S.lights.mode);
+      d.classList.toggle('on', S.lights.on && d.dataset.mode === S.lights.mode);
     });
   }
 
