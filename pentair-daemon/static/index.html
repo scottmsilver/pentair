@@ -358,7 +358,7 @@ body {
       <span class="card-status" id="poolStatus">Off</span>
     </div>
     <div class="temp-row">
-      <span class="temp-val" id="pT">--<span class="temp-deg">°</span></span>
+      <span class="temp-val"><span id="pT">--</span><span class="temp-deg">°</span></span>
       <span class="temp-age" id="pAge"></span>
     </div>
     <div class="heat-info" id="pHeat"></div>
@@ -376,7 +376,7 @@ body {
       <span class="card-status" id="spaStatus">Off</span>
     </div>
     <div class="temp-row">
-      <span class="temp-val" id="sT">--<span class="temp-deg">°</span></span>
+      <span class="temp-val"><span id="sT">--</span><span class="temp-deg">°</span></span>
       <span class="temp-age" id="sAge"></span>
     </div>
     <div class="heat-info" id="sHeat"></div>
@@ -568,7 +568,7 @@ function render() {
   if (S.pool) {
     const pTd = S.pool.temperature_display;
     const pTemp = pTd ? pTd.value : S.pool.temperature;
-    document.getElementById('pT').innerHTML = pTemp + '<span class="temp-deg">°</span>';
+    document.getElementById('pT').textContent = pTemp;
     document.getElementById('pS').textContent = S.pool.setpoint + '°F';
     const poolStatus = document.getElementById('poolStatus');
     if (S.pool.on && S.pool.heating !== 'off') {
@@ -589,7 +589,7 @@ function render() {
   if (S.spa) {
     const sTd = S.spa.temperature_display;
     const sTemp = sTd ? sTd.value : S.spa.temperature;
-    document.getElementById('sT').innerHTML = sTemp + '<span class="temp-deg">°</span>';
+    document.getElementById('sT').textContent = sTemp;
     document.getElementById('sS').textContent = S.spa.setpoint + '°F';
     const spaStatus = document.getElementById('spaStatus');
     if (S.spa.on && S.spa.heating !== 'off') {
