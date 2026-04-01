@@ -674,33 +674,70 @@ function render() {
   document.getElementById('goodnightBtn').classList.toggle('visible', !!S.goodnight_available);
 }
 
-async function doGoodnight() { await post('/api/goodnight'); }
+async function doGoodnight() {
+  // Optimistic: turn everything off immediately
+  if (S.spa) { S.spa.on = false; if (S.spa.accessories) S.spa.accessories.jets = false; }
+  if (S.lights) S.lights.on = false;
+  S.goodnight_available = false;
+  render();
+  await post('/api/goodnight');
+}
 
 async function setSpaState(state) {
   if (!S?.spa) return;
+  // Capture real state before optimistic mutation
+  const wasOn = S.spa.on;
+  const hadJets = S.spa.accessories?.jets || false;
+  // Optimistic update
   if (state === 'off') {
-    await post('/api/spa/off');
+    S.spa.on = false;
+    if (S.spa.accessories) S.spa.accessories.jets = false;
   } else if (state === 'spa') {
-    if (!S.spa.on) await post('/api/spa/on');
-    if (S.spa.accessories?.jets) await post('/api/spa/jets/off');
+    S.spa.on = true;
+    if (S.spa.accessories) S.spa.accessories.jets = false;
   } else if (state === 'jets') {
-    if (!S.spa.on) await post('/api/spa/on');
-    await post('/api/spa/jets/on');
+    S.spa.on = true;
+    if (S.spa.accessories) S.spa.accessories.jets = true;
   }
-  setTimeout(refresh, 1500);
+  S.goodnight_available = S.spa.on || (S.lights && S.lights.on);
+  render();
+  // Fire API calls based on pre-optimistic state
+  if (state === 'off') {
+    post('/api/spa/off');
+  } else if (state === 'spa') {
+    if (!wasOn) post('/api/spa/on');
+    if (hadJets) post('/api/spa/jets/off');
+  } else if (state === 'jets') {
+    if (!wasOn) post('/api/spa/on');
+    post('/api/spa/jets/on');
+  }
 }
 
 async function setMode(m) {
-  if (m === 'off') { await post('/api/lights/off'); }
-  else { await post('/api/lights/mode', { mode: m }); if (!S.lights.on) await post('/api/lights/on'); }
-  setTimeout(refresh, 500);
+  // Capture real state before optimistic mutation
+  const wasOn = S.lights.on;
+  // Optimistic update
+  if (m === 'off') {
+    S.lights.on = false;
+  } else {
+    S.lights.on = true;
+    S.lights.mode = m;
+  }
+  S.goodnight_available = (S.spa && S.spa.on) || S.lights.on;
+  render();
+  // Fire API calls based on pre-optimistic state
+  if (m === 'off') { post('/api/lights/off'); }
+  else { post('/api/lights/mode', { mode: m }); if (!wasOn) post('/api/lights/on'); }
 }
 
 async function toggleAux(id) {
   const a = S.auxiliaries.find(x => x.id === id);
   if (!a) return;
-  await post('/api/auxiliary/' + id + '/' + (a.on ? 'off' : 'on'));
-  setTimeout(refresh, 1000);
+  // Capture then optimistic toggle
+  const wasOn = a.on;
+  a.on = !wasOn;
+  render();
+  post('/api/auxiliary/' + id + '/' + (wasOn ? 'off' : 'on'));
 }
 
 function openSet(b) {
@@ -716,9 +753,12 @@ function closeSet() { document.getElementById('ov').classList.remove('open'); se
 function adj(d) { setV = Math.max(40, Math.min(104, setV + d)); document.getElementById('shV').textContent = setV; }
 async function confirmSet() {
   if (!setB) return;
-  await post('/api/' + setB + '/heat', { setpoint: setV });
+  // Optimistic setpoint
+  const body = setB === 'pool' ? S.pool : S.spa;
+  if (body) body.setpoint = setV;
   closeSet();
-  setTimeout(refresh, 2000);
+  render();
+  post('/api/' + setB + '/heat', { setpoint: setV });
 }
 
 // ── Matter info ──
