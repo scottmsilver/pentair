@@ -8,18 +8,12 @@
 <title>Pool</title>
 <style>
 :root {
-  --bg: #0c1222;
-  --deck: #2a3040;
-  --deck-light: #353d4f;
-  --water-off: #162030;
-  --pool-blue: #0a5a8c;
-  --pool-blue-light: #1080b8;
-  --spa-teal: #0e6e6e;
-  --spa-teal-light: #18a8a0;
+  --bg: #0a1628;
+  --card: rgba(255,255,255,0.06);
+  --card-border: rgba(255,255,255,0.08);
   --accent: #38bdf8;
   --teal: #2dd4bf;
   --warm: #f97316;
-  --gold: #eab308;
   --text: #e2e8f0;
   --text-dim: #94a3b8;
   --text-faint: rgba(255,255,255,0.35);
@@ -33,152 +27,145 @@ body {
   min-height: 100%;
   -webkit-tap-highlight-color: transparent;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  display: flex; justify-content: center;
+}
+.app {
+  width: 100%; max-width: 420px;
+  padding: 0 16px env(safe-area-inset-bottom);
 }
 
 /* ── Header ─────────────────────────────── */
-.hdr { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 20px 12px; }
-.hdr-l { display: flex; align-items: center; gap: 10px; }
-.hdr-dot { width: 10px; height: 10px; border-radius: 50%; background: #22c55e; }
-.hdr-dot.off { background: #ef4444; }
-.hdr h1 { font-size: 28px; font-weight: 700; color: var(--text-bright); }
-.hdr-r { text-align: right; }
-.hdr-temp { font-size: 28px; font-weight: 700; color: var(--text-bright); }
-.hdr-sub { font-size: 12px; color: var(--text-dim); }
-
-/* ── Deck ───────────────────────────────── */
-.deck {
-  margin: 0 0 0 8px; padding: 3px; border-radius: 14px;
-  width: 65%; max-width: 260px;
-  background: linear-gradient(135deg, var(--deck-light) 0%, var(--deck) 30%, var(--deck-light) 60%, var(--deck) 100%);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 4px 24px rgba(0,0,0,0.4);
+.hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 16px 0 12px;
 }
-.deck-inner { position: relative; width: 100%; aspect-ratio: 4/5; }
-
-/* ── Pool ───────────────────────────────── */
-.pool {
-  position: absolute; inset: 0; border-radius: 16px;
-  background: var(--water-off); transition: all 0.6s; overflow: hidden;
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3), inset 0 2px 4px rgba(0,0,0,0.2);
-}
-.pool.on { background: linear-gradient(175deg, var(--pool-blue) 0%, var(--pool-blue-light) 60%, var(--pool-blue) 100%); }
-.pool.on::before {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse at 20% 70%, rgba(255,255,255,0.04) 0%, transparent 50%),
-    radial-gradient(ellipse at 65% 25%, rgba(255,255,255,0.03) 0%, transparent 40%);
-  animation: pshim 10s ease-in-out infinite alternate;
-}
-@keyframes pshim { 0%{opacity:.5} 50%{opacity:1} 100%{opacity:.6} }
-
-/* ── Spa ────────────────────────────────── */
-.spa {
-  position: absolute; top: 0; right: 0;
-  width: 42%; height: 55%; border-radius: 16px;
-  background: var(--water-off); cursor: pointer;
-  transition: all 0.6s; overflow: hidden; z-index: 2;
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,0.3), inset 0 2px 4px rgba(0,0,0,0.2);
-  outline: 5px solid var(--deck);
-}
-.spa.on { background: linear-gradient(160deg, var(--spa-teal) 0%, var(--spa-teal-light) 70%, var(--spa-teal) 100%); }
-.spa.on::before {
-  content: ''; position: absolute; inset: -20px; pointer-events: none;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.12) 0%, transparent 30%),
-    radial-gradient(circle at 70% 50%, rgba(255,255,255,0.08) 0%, transparent 25%),
-    radial-gradient(circle at 50% 80%, rgba(255,255,255,0.10) 0%, transparent 28%),
-    radial-gradient(circle at 80% 20%, rgba(255,255,255,0.09) 0%, transparent 26%);
-  animation: caustics 4s ease-in-out infinite alternate;
-}
-@keyframes caustics {
-  0%{transform:translate(0,0) scale(1);opacity:.6}
-  33%{transform:translate(3px,-2px) scale(1.03);opacity:1}
-  66%{transform:translate(-2px,3px) scale(.98);opacity:.8}
-  100%{transform:translate(1px,1px) scale(1.01);opacity:.7}
-}
-
-/* ── Info overlays ──────────────────────── */
-.pool-info { position: absolute; bottom: 60px; left: 16px; z-index: 1; }
-.spa-info { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); text-align: center; z-index: 3; width: 85%; }
-
-.wlabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: var(--text-faint); }
-.on .wlabel { color: rgba(255,255,255,0.55); }
-.wtemp { font-size: 32px; font-weight: 700; color: rgba(255,255,255,0.5); line-height: 1; letter-spacing: -2px; transition: color 0.5s; }
-.on .wtemp { color: var(--text-bright); text-shadow: 0 2px 20px rgba(0,0,0,0.3); }
-.wtemp .deg { font-weight: 400; opacity: 0.5; }
-.wset { font-size: 11px; color: var(--text-faint); margin-top: 2px; cursor: pointer; }
-.on .wset { color: rgba(255,255,255,0.5); }
-.wset:active { color: var(--accent) !important; }
-.wheat { display: inline-block; margin-top: 3px; font-size: 11px; font-weight: 600; color: var(--warm); opacity: 0; transition: opacity 0.3s; }
-.wheat.on { opacity: 1; }
-
-
-/* ── Spa segmented control (Off / Spa / Spa+Jets) ── */
-.spa-seg {
-  display: none;
-  position: absolute; bottom: 6px; left: 6px; right: 6px;
-  z-index: 4;
-  justify-content: center; gap: 2px;
+.conn {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 500; color: var(--text-dim);
   background: rgba(255,255,255,0.06);
-  border-radius: 10px; padding: 3px;
+  padding: 5px 12px; border-radius: 20px;
 }
-.spa-seg.vis { display: flex; }
-.spa-seg-btn {
-  flex: 1; padding: 4px 0; border-radius: 8px;
-  background: transparent; border: none;
-  color: rgba(255,255,255,0.35);
-  font-size: 9px; font-weight: 600;
-  cursor: pointer; transition: all 0.3s;
-  text-align: center;
+.conn-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e;
 }
-.spa-seg-btn:active { opacity: 0.7; }
-.spa-seg-btn.active {
-  background: rgba(20, 184, 166, 0.3);
+.conn-dot.off { background: #ef4444; }
+.hdr-btns { display: flex; gap: 4px; align-items: center; }
+.gear-btn, .goodnight-btn {
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(255,255,255,0.06); border: none; cursor: pointer;
+  color: var(--text-dim); font-size: 18px;
+  display: flex; align-items: center; justify-content: center;
+  transition: color 0.2s;
+}
+.gear-btn:active, .goodnight-btn:active { color: var(--text-bright); }
+.goodnight-btn { display: none; }
+.goodnight-btn.visible { display: flex; }
+
+/* ── Cards ──────────────────────────────── */
+.card {
+  background: var(--card);
+  border: 1px solid var(--card-border);
+  border-radius: 20px;
+  padding: 20px;
+  margin-bottom: 12px;
+}
+.card-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 4px;
+}
+.card-title {
+  font-size: 17px; font-weight: 600; color: var(--text-bright);
+}
+.card-status {
+  font-size: 13px; font-weight: 500; color: var(--text-dim);
+}
+.card-status.on { color: var(--teal); }
+.card-status.heating { color: var(--warm); }
+
+/* ── Temperature display ────────────────── */
+.temp-row {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 2px;
+}
+.temp-val {
+  font-size: 52px; font-weight: 700; color: var(--text-bright);
+  letter-spacing: -2px; line-height: 1.1;
+}
+.temp-deg { font-weight: 400; opacity: 0.5; }
+.temp-age {
+  font-size: 13px; color: var(--text-dim);
+}
+
+/* ── Setpoint row ───────────────────────── */
+.setpoint-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-top: 12px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.setpoint-row:active { background: rgba(255,255,255,0.08); }
+.setpoint-label { font-size: 15px; color: var(--text-dim); }
+.setpoint-val {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 15px; font-weight: 600; color: var(--text-bright);
+}
+.setpoint-arrow { color: var(--text-dim); font-size: 14px; }
+
+/* ── Segmented control ──────────────────── */
+.seg-ctrl {
+  display: flex; gap: 8px;
+  margin-top: 12px; margin-bottom: 4px;
+}
+.seg-btn {
+  padding: 8px 18px; border-radius: 20px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-dim);
+  font-size: 14px; font-weight: 600;
+  cursor: pointer; transition: all 0.2s;
+}
+.seg-btn:active { transform: scale(0.95); }
+.seg-btn.active {
+  background: rgba(20, 184, 166, 0.18);
+  border-color: rgba(20, 184, 166, 0.35);
   color: var(--teal);
 }
 
-/* ── Lights (bottom of pool) ────────────── */
-.lights-strip {
-  position: absolute; bottom: 8px; left: 8px; right: 8px;
-  z-index: 5; display: flex; align-items: center; gap: 5px;
-  overflow: hidden;
+/* ── Lights section ─────────────────────── */
+.lights-hdr {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 14px;
 }
-.lt-sel {
-  width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
-  border: 2px solid rgba(255,255,255,0.25);
-  background: transparent; cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px; color: rgba(255,255,255,0.35);
-  transition: all 0.3s;
+.lights-title { font-size: 17px; font-weight: 600; color: var(--text-bright); }
+.lights-status { font-size: 13px; font-weight: 500; color: var(--text-dim); }
+.lights-status.on { color: var(--teal); }
+
+.lights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 10px;
 }
-.lt-sel:active { transform: scale(0.9); }
-.lt-sel.on { border-color: rgba(255,255,255,0.5); }
-.color-scroll {
-  display: flex; gap: 5px;
-  max-width: 0;
-  overflow-x: auto; overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
-  transition: max-width 0.35s ease, opacity 0.3s;
-  opacity: 0;
-}
-.color-scroll::-webkit-scrollbar { display: none; }
-.color-scroll.open { max-width: 100%; opacity: 1; cursor: grab; touch-action: pan-x; }
 .cswatch {
-  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
-  border: 2px solid transparent; cursor: pointer;
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 3px solid transparent; cursor: pointer;
   transition: transform 0.2s, border-color 0.3s;
 }
-.cswatch:active { transform: scale(0.85); }
+.cswatch:active { transform: scale(0.9); }
 .cswatch.on {
   border-color: white;
-  box-shadow: 0 0 6px rgba(255,255,255,0.3);
+  box-shadow: 0 0 10px rgba(255,255,255,0.25);
 }
-/* Off swatch */
 .cswatch.off-swatch {
-  background: rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.06);
+  border: 3px solid rgba(255,255,255,0.15);
   display: flex; align-items: center; justify-content: center;
-  font-size: 10px; color: rgba(255,255,255,0.4);
+  font-size: 16px; color: rgba(255,255,255,0.4);
 }
-/* Color gradients for each mode */
 .cswatch[data-mode="swim"]      { background: linear-gradient(135deg, #0ea5e9, #14b8a6); }
 .cswatch[data-mode="party"]     { background: conic-gradient(#ef4444, #eab308, #22c55e, #3b82f6, #a855f7, #ef4444); }
 .cswatch[data-mode="romantic"]  { background: linear-gradient(135deg, #ec4899, #f59e0b); }
@@ -193,44 +180,59 @@ body {
 .cswatch[data-mode="purple"]    { background: #a855f7; }
 
 /* ── Auxiliaries ─────────────────────────── */
-.auxs { display: flex; gap: 8px; margin: 0 0 8px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06); }
+.auxs {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
 .aux {
-  flex: 1; padding: 14px 6px; border-radius: 16px;
+  flex: 1; min-width: 80px;
+  padding: 14px 8px; border-radius: 16px;
   background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.06);
-  color: var(--text-dim); font-size: 12px; font-weight: 500;
+  color: var(--text-dim); font-size: 13px; font-weight: 500;
   cursor: pointer; text-align: center; transition: all 0.3s;
 }
 .aux:active { transform: scale(0.96); }
 .aux.on { background: rgba(56,189,248,0.12); border-color: rgba(56,189,248,0.3); color: var(--accent); }
 
-/* ── Settings gear ───────────────────────── */
-.gear-btn, .goodnight-btn {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: none; border: none; cursor: pointer;
-  color: var(--text-dim); font-size: 18px;
-  display: flex; align-items: center; justify-content: center;
-  transition: color 0.2s, opacity 0.3s;
-}
-.gear-btn:active, .goodnight-btn:active { color: var(--text-bright); }
-.goodnight-btn { display: none; }
-.goodnight-btn.visible { display: flex; }
-
 /* ── Tech drawer ────────────────────────── */
 .tech-drawer {
   max-height: 0; overflow: hidden;
   transition: max-height 0.3s ease, padding 0.3s;
-  margin: 0 16px; padding: 0 14px;
+  padding: 0;
 }
-.tech-drawer.open { max-height: 500px; padding: 12px 14px; }
-.tech-drawer .tech-row {
+.tech-drawer.open { max-height: 600px; padding: 12px 0; }
+.tech-row {
   display: flex; justify-content: space-between;
-  font-size: 12px; color: var(--text-dim);
-  padding: 6px 0;
+  font-size: 13px; color: var(--text-dim);
+  padding: 8px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
-.tech-drawer .tech-row:last-child { border-bottom: none; }
-.tech-drawer .tech-label { color: rgba(255,255,255,0.35); }
-.tech-drawer .tech-val { font-weight: 600; }
+.tech-row:last-child { border-bottom: none; }
+.tech-label { color: rgba(255,255,255,0.35); }
+.tech-val { font-weight: 600; }
+
+/* ── Matter Bridge section ───────────── */
+.matter-section {
+  margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.matter-title {
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 10px;
+}
+.matter-body { display: flex; align-items: flex-start; gap: 14px; }
+.matter-qr {
+  width: 120px; height: 120px; border-radius: 8px;
+  background: white; padding: 4px; flex-shrink: 0;
+}
+.matter-qr img { width: 100%; height: 100%; image-rendering: pixelated; }
+.matter-info { font-size: 12px; color: var(--text-dim); flex: 1; }
+.matter-info .matter-label-txt { color: rgba(255,255,255,0.35); margin-bottom: 2px; }
+.matter-info .matter-val {
+  font-family: 'SF Mono', 'Menlo', monospace; font-weight: 600;
+  color: var(--text); margin-bottom: 8px; word-break: break-all;
+}
+.matter-hint { font-size: 11px; color: var(--text-faint); line-height: 1.4; margin-top: 4px; }
 
 /* ── Bottom sheet ────────────────────────── */
 .ov {
@@ -263,92 +265,95 @@ body {
 .sh .sa:active { transform: scale(0.97); }
 .sh .sa-c { background: rgba(255,255,255,0.08); color: var(--text); }
 .sh .sa-s { background: var(--accent); color: #0f172a; }
-
-/* ── Matter Bridge section ───────────── */
-.matter-section {
-  margin-top: 12px; padding-top: 12px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-.matter-title {
-  font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 10px;
-}
-.matter-body { display: flex; align-items: flex-start; gap: 14px; }
-.matter-qr {
-  width: 120px; height: 120px; border-radius: 8px;
-  background: white; padding: 4px; flex-shrink: 0;
-}
-.matter-qr img { width: 100%; height: 100%; image-rendering: pixelated; }
-.matter-info { font-size: 12px; color: var(--text-dim); flex: 1; }
-.matter-info .matter-label { color: rgba(255,255,255,0.35); margin-bottom: 2px; }
-.matter-info .matter-val {
-  font-family: 'SF Mono', 'Menlo', monospace; font-weight: 600;
-  color: var(--text); margin-bottom: 8px; word-break: break-all;
-}
-.matter-hint { font-size: 11px; color: var(--text-faint); line-height: 1.4; margin-top: 4px; }
 </style>
 </head>
 <body>
 
-<div class="hdr">
-  <div></div>
-  <div style="display:flex;gap:4px;align-items:center">
-    <button class="goodnight-btn" id="goodnightBtn" onclick="doGoodnight()">🌙</button>
-    <button class="gear-btn" onclick="document.getElementById('techDraw').classList.toggle('open')">⚙</button>
-  </div>
-</div>
-
-<div class="deck"><div class="deck-inner">
-  <div class="pool" id="pool">
-    <div class="pool-info">
-            <div class="wtemp" id="pT">--<span class="deg">°</span></div>
-      <div class="wset" id="pS" onclick="openSet('pool')">set --°</div>
-      <div class="wheat" id="pH">Heating</div>
+<div class="app">
+  <div class="hdr">
+    <div class="conn">
+      <div class="conn-dot" id="connDot"></div>
+      <span id="connText">Connecting</span>
+    </div>
+    <div class="hdr-btns">
+      <button class="goodnight-btn" id="goodnightBtn" onclick="doGoodnight()">🌙</button>
+      <button class="gear-btn" onclick="document.getElementById('techDraw').classList.toggle('open')">⚙️</button>
     </div>
   </div>
 
-  <div class="spa" id="spa">
-    <div class="spa-info">
-      <div class="wtemp" id="sT">--<span class="deg">°</span></div>
-      <div class="wset" id="sS" onclick="event.stopPropagation(); openSet('spa')">set --°</div>
-      <div class="wheat" id="sH">Heating</div>
+  <!-- Pool card -->
+  <div class="card" id="poolCard">
+    <div class="card-hdr">
+      <span class="card-title">Pool</span>
+      <span class="card-status" id="poolStatus">Off</span>
     </div>
-    <div class="spa-seg" id="spaSeg">
-      <button class="spa-seg-btn" data-state="off" onclick="event.stopPropagation(); setSpaState('off')">Off</button>
-      <button class="spa-seg-btn" data-state="spa" onclick="event.stopPropagation(); setSpaState('spa')">Spa</button>
-      <button class="spa-seg-btn" data-state="jets" onclick="event.stopPropagation(); setSpaState('jets')">Jets</button>
+    <div class="temp-row">
+      <span class="temp-val" id="pT">--<span class="temp-deg">°</span></span>
+      <span class="temp-age" id="pAge"></span>
+    </div>
+    <div class="setpoint-row" onclick="openSet('pool')">
+      <span class="setpoint-label">Setpoint</span>
+      <span class="setpoint-val"><span id="pS">--°F</span> <span class="setpoint-arrow">›</span></span>
     </div>
   </div>
 
-  <div class="lights-strip">
-    <div class="lt-sel" id="ltSel" onclick="event.stopPropagation(); document.getElementById('cs').classList.toggle('open')">⏻</div>
-    <div class="color-scroll" id="cs"></div>
+  <!-- Spa card -->
+  <div class="card" id="spaCard">
+    <div class="card-hdr">
+      <span class="card-title">Spa</span>
+      <span class="card-status" id="spaStatus">Off</span>
+    </div>
+    <div class="temp-row">
+      <span class="temp-val" id="sT">--<span class="temp-deg">°</span></span>
+      <span class="temp-age" id="sAge"></span>
+    </div>
+    <div class="seg-ctrl" id="spaSeg">
+      <button class="seg-btn" data-state="off" onclick="setSpaState('off')">Off</button>
+      <button class="seg-btn" data-state="spa" onclick="setSpaState('spa')">Spa</button>
+      <button class="seg-btn" data-state="jets" onclick="setSpaState('jets')">Jets</button>
+    </div>
+    <div class="setpoint-row" onclick="openSet('spa')">
+      <span class="setpoint-label">Setpoint</span>
+      <span class="setpoint-val"><span id="sS">--°F</span> <span class="setpoint-arrow">›</span></span>
+    </div>
   </div>
-</div></div>
 
-<div class="tech-drawer" id="techDraw">
+  <!-- Lights card -->
+  <div class="card" id="lightsCard">
+    <div class="lights-hdr">
+      <span class="lights-title">Lights</span>
+      <span class="lights-status" id="lightsStatus">Off</span>
+    </div>
+    <div class="lights-grid" id="lightsGrid"></div>
+  </div>
+
+  <!-- Auxiliaries -->
   <div class="auxs" id="axs"></div>
-  <div class="tech-row" style="margin-top:8px"><span class="tech-label">Status</span><span class="tech-val" id="tdConn">--</span></div>
-  <div class="tech-row"><span class="tech-label">Equipment Pad</span><span class="tech-val" id="tdAir">--</span></div>
-  <div class="tech-row"><span class="tech-label">Controller</span><span class="tech-val" id="tdCtrl">--</span></div>
-  <div class="tech-row"><span class="tech-label">Firmware</span><span class="tech-val" id="tdFw">--</span></div>
-  <div class="tech-row"><span class="tech-label">Pump</span><span class="tech-val" id="tdPump">--</span></div>
-  <div class="tech-row"><span class="tech-label">RPM</span><span class="tech-val" id="tdRpm">—</span></div>
-  <div class="tech-row"><span class="tech-label">Power</span><span class="tech-val" id="tdW">—</span></div>
-  <div class="tech-row"><span class="tech-label">Flow</span><span class="tech-val" id="tdGpm">—</span></div>
-  <div class="matter-section" id="matterSection" style="display:none">
-    <div class="matter-title">Matter Bridge</div>
-    <div class="matter-body">
-      <div class="matter-qr"><img id="matterQr" src="/api/matter/qr" alt="Matter QR Code"></div>
-      <div class="matter-info">
-        <div class="matter-label">Manual code</div>
-        <div class="matter-val" id="matterCode">--</div>
-        <div class="matter-hint">Scan with Google Home app to commission this pool as a Matter device.</div>
+
+  <!-- Tech drawer -->
+  <div class="tech-drawer" id="techDraw">
+    <div class="tech-row"><span class="tech-label">Equipment Pad</span><span class="tech-val" id="tdAir">--</span></div>
+    <div class="tech-row"><span class="tech-label">Controller</span><span class="tech-val" id="tdCtrl">--</span></div>
+    <div class="tech-row"><span class="tech-label">Firmware</span><span class="tech-val" id="tdFw">--</span></div>
+    <div class="tech-row"><span class="tech-label">Pump</span><span class="tech-val" id="tdPump">--</span></div>
+    <div class="tech-row"><span class="tech-label">RPM</span><span class="tech-val" id="tdRpm">—</span></div>
+    <div class="tech-row"><span class="tech-label">Power</span><span class="tech-val" id="tdW">—</span></div>
+    <div class="tech-row"><span class="tech-label">Flow</span><span class="tech-val" id="tdGpm">—</span></div>
+    <div class="matter-section" id="matterSection" style="display:none">
+      <div class="matter-title">Matter Bridge</div>
+      <div class="matter-body">
+        <div class="matter-qr"><img id="matterQr" src="/api/matter/qr" alt="Matter QR Code"></div>
+        <div class="matter-info">
+          <div class="matter-label-txt">Manual code</div>
+          <div class="matter-val" id="matterCode">--</div>
+          <div class="matter-hint">Scan with Google Home app to commission this pool as a Matter device.</div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 
+<!-- Setpoint bottom sheet -->
 <div class="ov" id="ov" onclick="if(event.target===this)closeSet()">
   <div class="sh">
     <div class="sh-bar"></div>
@@ -367,147 +372,202 @@ body {
 
 <script>
 const MODES = ['swim','party','romantic','caribbean','american','sunset','royal','blue','green','red','white','purple'];
-let S=null,setB=null,setV=0;
+let S = null, setB = null, setV = 0;
 
-async function post(p,b){const o={method:'POST'};if(b){o.headers={'Content-Type':'application/json'};o.body=JSON.stringify(b);}return(await fetch(p,o)).json();}
-async function refresh(){try{S=await(await fetch('/api/pool')).json();render();}catch{document.getElementById('tdConn').textContent='Disconnected';}}
-function connectWs(){const w=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/api/ws');w.onmessage=()=>refresh();w.onclose=()=>setTimeout(connectWs,3000);}
+async function post(p, b) {
+  const o = { method: 'POST' };
+  if (b) { o.headers = { 'Content-Type': 'application/json' }; o.body = JSON.stringify(b); }
+  return (await fetch(p, o)).json();
+}
 
-function render(){
-  if(!S)return;
-  document.getElementById('tdAir').textContent=S.system.air_temperature+'°F';
-  document.getElementById('tdConn').textContent='Connected';
+async function refresh() {
+  try {
+    S = await (await fetch('/api/pool')).json();
+    render();
+  } catch {
+    document.getElementById('connDot').classList.add('off');
+    document.getElementById('connText').textContent = 'Disconnected';
+  }
+}
 
-  if(S.spa){
-    document.getElementById('sT').innerHTML=S.spa.temperature+'<span class="deg">°</span>';
-    document.getElementById('sS').textContent='set '+S.spa.setpoint+'°';
-    document.getElementById('spa').classList.toggle('on',S.spa.on);
-    document.getElementById('sH').classList.toggle('on',S.spa.heating!=='off');
-    // Segmented control state
-    const seg=document.getElementById('spaSeg');
-    const hasJets=S.spa.accessories&&S.spa.accessories.jets!==undefined;
-    seg.classList.toggle('vis',true);
-    let spaState='off';
-    if(S.spa.on&&hasJets&&S.spa.accessories.jets) spaState='jets';
-    else if(S.spa.on) spaState='spa';
-    seg.querySelectorAll('.spa-seg-btn').forEach(b=>{
-      b.classList.toggle('active',b.dataset.state===spaState);
+function connectWs() {
+  const w = new WebSocket((location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/api/ws');
+  w.onmessage = () => refresh();
+  w.onclose = () => setTimeout(connectWs, 3000);
+}
+
+function render() {
+  if (!S) return;
+
+  document.getElementById('connDot').classList.remove('off');
+  document.getElementById('connText').textContent = 'Connected';
+
+  // Pool
+  if (S.pool) {
+    document.getElementById('pT').innerHTML = S.pool.temperature + '<span class="temp-deg">°</span>';
+    document.getElementById('pS').textContent = S.pool.setpoint + '°F';
+    const poolStatus = document.getElementById('poolStatus');
+    if (S.pool.heating !== 'off') {
+      poolStatus.textContent = 'Heating';
+      poolStatus.className = 'card-status heating';
+    } else if (S.pool.on) {
+      poolStatus.textContent = 'On';
+      poolStatus.className = 'card-status on';
+    } else {
+      poolStatus.textContent = 'Off';
+      poolStatus.className = 'card-status';
+    }
+    if (S.pool.temperature_age) {
+      document.getElementById('pAge').textContent = S.pool.temperature_age;
+    }
+  }
+
+  // Spa
+  if (S.spa) {
+    document.getElementById('sT').innerHTML = S.spa.temperature + '<span class="temp-deg">°</span>';
+    document.getElementById('sS').textContent = S.spa.setpoint + '°F';
+    const spaStatus = document.getElementById('spaStatus');
+    if (S.spa.heating !== 'off') {
+      spaStatus.textContent = 'Heating';
+      spaStatus.className = 'card-status heating';
+    } else if (S.spa.on) {
+      spaStatus.textContent = 'On';
+      spaStatus.className = 'card-status on';
+    } else {
+      spaStatus.textContent = 'Off';
+      spaStatus.className = 'card-status';
+    }
+    if (S.spa.temperature_age) {
+      document.getElementById('sAge').textContent = S.spa.temperature_age;
+    }
+    // Segmented control
+    const hasJets = S.spa.accessories && S.spa.accessories.jets !== undefined;
+    let spaState = 'off';
+    if (S.spa.on && hasJets && S.spa.accessories.jets) spaState = 'jets';
+    else if (S.spa.on) spaState = 'spa';
+    document.querySelectorAll('#spaSeg .seg-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.state === spaState);
     });
   }
-  if(S.pool){
-    document.getElementById('pT').innerHTML=S.pool.temperature+'<span class="deg">°</span>';
-    document.getElementById('pS').textContent='set '+S.pool.setpoint+'°';
-    document.getElementById('pool').classList.toggle('on',S.pool.on);
-    document.getElementById('pH').classList.toggle('on',S.pool.heating!=='off');
-  }
-  if(S.lights){
-    const sel=document.getElementById('ltSel');
-    if(S.lights.on&&S.lights.mode){
-      sel.classList.add('on');
-      sel.style.background=getModeColor(S.lights.mode);
-      sel.textContent='';
+
+  // Lights
+  if (S.lights) {
+    const grid = document.getElementById('lightsGrid');
+    const status = document.getElementById('lightsStatus');
+    if (S.lights.on && S.lights.mode) {
+      status.textContent = S.lights.mode.charAt(0).toUpperCase() + S.lights.mode.slice(1);
+      status.className = 'lights-status on';
     } else {
-      sel.classList.remove('on');
-      sel.style.background='';
-      sel.textContent='⏻';
+      status.textContent = 'Off';
+      status.className = 'lights-status';
     }
-    const cs=document.getElementById('cs');
-    if(!cs.children.length){
-      // Off swatch
-      const off=document.createElement('div');
-      off.className='cswatch off-swatch';
-      off.textContent='⏻';
-      off.onclick=()=>{setMode('off');cs.classList.remove('open');};
-      cs.appendChild(off);
-      MODES.forEach(m=>{
-        const d=document.createElement('div');
-        d.className='cswatch'; d.dataset.mode=m;
-        d.style.background=getModeColor(m);
-        d.onclick=()=>{setMode(m);cs.classList.remove('open');};
-        cs.appendChild(d);
+    if (!grid.children.length) {
+      const off = document.createElement('div');
+      off.className = 'cswatch off-swatch';
+      off.textContent = '⏻';
+      off.onclick = () => setMode('off');
+      grid.appendChild(off);
+      MODES.forEach(m => {
+        const d = document.createElement('div');
+        d.className = 'cswatch'; d.dataset.mode = m;
+        d.onclick = () => setMode(m);
+        grid.appendChild(d);
       });
     }
-    cs.querySelectorAll('.cswatch[data-mode]').forEach(d=>d.classList.toggle('on',d.dataset.mode===S.lights.mode));
-  }
-
-  const ax=document.getElementById('axs');
-  if(S.auxiliaries){
-    if(!ax.children.length)S.auxiliaries.forEach(a=>{
-      const b=document.createElement('button');b.className='aux';b.id='ax-'+a.id;
-      b.textContent=a.name;b.onclick=()=>toggleAux(a.id);ax.appendChild(b);
+    grid.querySelectorAll('.cswatch[data-mode]').forEach(d => {
+      d.classList.toggle('on', d.dataset.mode === S.lights.mode);
     });
-    S.auxiliaries.forEach(a=>{const b=document.getElementById('ax-'+a.id);if(b)b.classList.toggle('on',a.on);});
-  }
-  if(S.system){
-    document.getElementById('tdCtrl').textContent=S.system.controller||'--';
-    document.getElementById('tdFw').textContent=S.system.firmware||'--';
-  }
-  if(S.pump){
-    document.getElementById('tdPump').textContent=S.pump.pump_type+(S.pump.running?' (running)':' (off)');
-    document.getElementById('tdRpm').textContent=S.pump.running?S.pump.rpm+' RPM':'—';
-    document.getElementById('tdW').textContent=S.pump.running?S.pump.watts+'W':'—';
-    document.getElementById('tdGpm').textContent=S.pump.running?S.pump.gpm+' GPM':'—';
   }
 
-  document.getElementById('goodnightBtn').classList.toggle('visible',!!S.goodnight_available);
+  // Auxiliaries
+  const ax = document.getElementById('axs');
+  if (S.auxiliaries) {
+    if (!ax.children.length) S.auxiliaries.forEach(a => {
+      const b = document.createElement('button'); b.className = 'aux'; b.id = 'ax-' + a.id;
+      b.textContent = a.name; b.onclick = () => toggleAux(a.id); ax.appendChild(b);
+    });
+    S.auxiliaries.forEach(a => {
+      const b = document.getElementById('ax-' + a.id);
+      if (b) b.classList.toggle('on', a.on);
+    });
+  }
+
+  // Tech info
+  if (S.system) {
+    document.getElementById('tdAir').textContent = S.system.air_temperature + '°F';
+    document.getElementById('tdCtrl').textContent = S.system.controller || '--';
+    document.getElementById('tdFw').textContent = S.system.firmware || '--';
+  }
+  if (S.pump) {
+    document.getElementById('tdPump').textContent = S.pump.pump_type + (S.pump.running ? ' (running)' : ' (off)');
+    document.getElementById('tdRpm').textContent = S.pump.running ? S.pump.rpm + ' RPM' : '—';
+    document.getElementById('tdW').textContent = S.pump.running ? S.pump.watts + 'W' : '—';
+    document.getElementById('tdGpm').textContent = S.pump.running ? S.pump.gpm + ' GPM' : '—';
+  }
+
+  document.getElementById('goodnightBtn').classList.toggle('visible', !!S.goodnight_available);
 }
 
-async function doGoodnight(){
-  await post('/api/goodnight');
-}
+async function doGoodnight() { await post('/api/goodnight'); }
 
-function getModeColor(m){
-  const c={swim:'linear-gradient(135deg,#0ea5e9,#14b8a6)',party:'conic-gradient(#ef4444,#eab308,#22c55e,#3b82f6,#a855f7,#ef4444)',romantic:'linear-gradient(135deg,#ec4899,#f59e0b)',caribbean:'linear-gradient(135deg,#06b6d4,#2dd4bf)',american:'linear-gradient(135deg,#ef4444,#eff6ff,#3b82f6)',sunset:'linear-gradient(135deg,#f97316,#dc2626)',royal:'linear-gradient(135deg,#7c3aed,#3b82f6)',blue:'#3b82f6',green:'#22c55e',red:'#ef4444',white:'radial-gradient(circle,#fff,#cbd5e1)',purple:'#a855f7'};
-  return c[m]||'rgba(255,255,255,0.1)';
-}
-async function setSpaState(state){
-  if(!S?.spa)return;
-  if(state==='off'){
+async function setSpaState(state) {
+  if (!S?.spa) return;
+  if (state === 'off') {
     await post('/api/spa/off');
-  } else if(state==='spa'){
-    if(!S.spa.on) await post('/api/spa/on');
-    if(S.spa.accessories?.jets) await post('/api/spa/jets/off');
-  } else if(state==='jets'){
-    if(!S.spa.on) await post('/api/spa/on');
+  } else if (state === 'spa') {
+    if (!S.spa.on) await post('/api/spa/on');
+    if (S.spa.accessories?.jets) await post('/api/spa/jets/off');
+  } else if (state === 'jets') {
+    if (!S.spa.on) await post('/api/spa/on');
     await post('/api/spa/jets/on');
   }
-  setTimeout(refresh,1500);
+  setTimeout(refresh, 1500);
 }
-async function setMode(m){if(m==='off'){await post('/api/lights/off');}else{await post('/api/lights/mode',{mode:m});if(!S.lights.on)await post('/api/lights/on');}setTimeout(refresh,500);}
-async function toggleAux(id){const a=S.auxiliaries.find(x=>x.id===id);if(!a)return;await post('/api/auxiliary/'+id+'/'+(a.on?'off':'on'));setTimeout(refresh,1000);}
 
-function openSet(b){setB=b;const d=b==='pool'?S.pool:S.spa;if(!d)return;setV=d.setpoint;
-  document.getElementById('shT').textContent=(b==='pool'?'Pool':'Spa')+' Temperature';
-  document.getElementById('shV').textContent=setV;document.getElementById('ov').classList.add('open');}
-function closeSet(){document.getElementById('ov').classList.remove('open');setB=null;}
-function adj(d){setV=Math.max(40,Math.min(104,setV+d));document.getElementById('shV').textContent=setV;}
-async function confirmSet(){if(!setB)return;await post('/api/'+setB+'/heat',{setpoint:setV});closeSet();setTimeout(refresh,2000);}
+async function setMode(m) {
+  if (m === 'off') { await post('/api/lights/off'); }
+  else { await post('/api/lights/mode', { mode: m }); if (!S.lights.on) await post('/api/lights/on'); }
+  setTimeout(refresh, 500);
+}
 
-// Drag-to-scroll for the color strip (works on both mouse and touch)
-(function(){
-  const el=document.getElementById('cs');
-  let down=false, startX=0, scrollL=0, moved=false;
-  el.addEventListener('mousedown',e=>{down=true;moved=false;startX=e.pageX;scrollL=el.scrollLeft;el.style.cursor='grabbing';e.preventDefault();});
-  el.addEventListener('mousemove',e=>{if(!down)return;moved=true;el.scrollLeft=scrollL-(e.pageX-startX);});
-  document.addEventListener('mouseup',()=>{down=false;el.style.cursor='';});
-  el.addEventListener('mouseleave',()=>{down=false;el.style.cursor='';});
-  // Prevent click on swatches if user was dragging
-  el.addEventListener('click',e=>{if(moved){e.stopPropagation();e.preventDefault();}},{capture:true});
-})();
+async function toggleAux(id) {
+  const a = S.auxiliaries.find(x => x.id === id);
+  if (!a) return;
+  await post('/api/auxiliary/' + id + '/' + (a.on ? 'off' : 'on'));
+  setTimeout(refresh, 1000);
+}
+
+function openSet(b) {
+  setB = b;
+  const d = b === 'pool' ? S.pool : S.spa;
+  if (!d) return;
+  setV = d.setpoint;
+  document.getElementById('shT').textContent = (b === 'pool' ? 'Pool' : 'Spa') + ' Temperature';
+  document.getElementById('shV').textContent = setV;
+  document.getElementById('ov').classList.add('open');
+}
+function closeSet() { document.getElementById('ov').classList.remove('open'); setB = null; }
+function adj(d) { setV = Math.max(40, Math.min(104, setV + d)); document.getElementById('shV').textContent = setV; }
+async function confirmSet() {
+  if (!setB) return;
+  await post('/api/' + setB + '/heat', { setpoint: setV });
+  closeSet();
+  setTimeout(refresh, 2000);
+}
 
 // ── Matter info ──
-async function loadMatter(){
-  try{
-    const info=await(await fetch('/api/matter/info')).json();
-    if(info.manual_code){
-      document.getElementById('matterCode').textContent=info.manual_code;
-      document.getElementById('matterSection').style.display='';
+async function loadMatter() {
+  try {
+    const info = await (await fetch('/api/matter/info')).json();
+    if (info.manual_code) {
+      document.getElementById('matterCode').textContent = info.manual_code;
+      document.getElementById('matterSection').style.display = '';
     }
-  }catch{}
+  } catch {}
 }
 loadMatter();
 
-refresh();connectWs();setInterval(refresh,15000);
+refresh(); connectWs(); setInterval(refresh, 15000);
 </script>
 </body>
 </html>
