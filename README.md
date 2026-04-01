@@ -18,9 +18,9 @@
 <h3 align="center">One scenario. Every surface.</h3>
 
 <p align="center">
-  <img src=".github/assets/showcase/ios-spa-heating.png" alt="iOS app showing spa heating to 104" height="500">
+  <img src=".github/assets/showcase/ios-spa-heating.png" alt="iOS app showing spa heating to 104" height="480">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src=".github/assets/showcase/web-dashboard.png" alt="Web dashboard" height="320">
+  <img src=".github/assets/showcase/web-dashboard.png" alt="Web dashboard" height="480">
   &nbsp;&nbsp;&nbsp;&nbsp;
   <img src=".github/assets/showcase/android-spa-heating.png" alt="Android app showing spa heating to 104" height="480">
 </p>
