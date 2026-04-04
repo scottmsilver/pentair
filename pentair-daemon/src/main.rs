@@ -5,6 +5,7 @@ mod config;
 mod devices;
 mod fcm;
 mod heat;
+mod network_secret;
 mod scheduled_heat;
 mod scenes;
 mod spa_notifications;
@@ -100,8 +101,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scene_store = scenes::SceneStore::new(scenes::resolve_scenes(&config.scenes));
     info!("loaded {} scene(s)", scene_store.list().len());
 
+    // Load or generate network secret for LAN-based remote access approval
+    let network_secret = network_secret::load_or_create();
+
+    // Discover LAN IP for the approval flow (UDP trick: no data sent)
+    let port = config.bind.split(':').last().unwrap_or("8080");
+    let daemon_local = match std::net::UdpSocket::bind("0.0.0.0:0") {
+        Ok(sock) => {
+            let _ = sock.connect("8.8.8.8:80");
+            match sock.local_addr() {
+                Ok(addr) => format!("{}:{}", addr.ip(), port),
+                Err(_) => format!("localhost:{}", port),
+            }
+        }
+        Err(_) => format!("localhost:{}", port),
+    };
+
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store);
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, daemon_local);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);

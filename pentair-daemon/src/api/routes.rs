@@ -14,6 +14,7 @@ use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
 
 const INDEX_HTML: &str = include_str!("../../static/index.html");
+const APPROVE_HTML: &str = include_str!("../../static/approve.html");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -23,6 +24,8 @@ pub struct AppState {
     pub devices: crate::devices::DeviceManager,
     pub scheduled_heat: SharedScheduledHeat,
     pub scenes: SceneStore,
+    pub network_secret: String,
+    pub daemon_local: String,
 }
 
 pub fn router(
@@ -32,6 +35,8 @@ pub fn router(
     devices: crate::devices::DeviceManager,
     scheduled_heat: SharedScheduledHeat,
     scenes: SceneStore,
+    network_secret: String,
+    daemon_local: String,
 ) -> Router {
     let state = AppState {
         shared,
@@ -40,11 +45,15 @@ pub fn router(
         devices,
         scheduled_heat,
         scenes,
+        network_secret,
+        daemon_local,
     };
 
     Router::new()
         // ── Web UI ─────────────────────────────────────────────────
         .route("/", get(serve_ui))
+        .route("/approve", get(serve_approve_page))
+        .route("/api/approve", post(approve_redirect))
         // ── Semantic API (primary — use these) ──────────────────────
         .route("/api/pool", get(get_pool))
         .route("/api/pool/on", post(pool_on))
@@ -89,11 +98,12 @@ pub fn router(
 
 // ── Web UI ──────────────────────────────────────────────────────────────
 
-async fn serve_ui() -> impl IntoResponse {
+async fn serve_ui(State(state): State<AppState>) -> impl IntoResponse {
+    let html = INDEX_HTML.replace("{{DAEMON_LOCAL}}", &state.daemon_local);
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
-        INDEX_HTML,
+        html,
     )
 }
 
@@ -964,4 +974,67 @@ fn json_to_result(json: &serde_json::Value) -> Result<(), String> {
             .to_string();
         Err(error)
     }
+}
+
+// ── LAN Approval ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ApproveQuery {
+    email: Option<String>,
+    origin: Option<String>,
+}
+
+async fn serve_approve_page(
+    axum::extract::Query(q): axum::extract::Query<ApproveQuery>,
+) -> impl IntoResponse {
+    let email = q.email.unwrap_or_default();
+    let origin = q.origin.unwrap_or_default();
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+    let html = APPROVE_HTML
+        .replace("{{EMAIL}}", &esc(&email))
+        .replace("{{ORIGIN}}", &esc(&origin));
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+}
+
+#[derive(Deserialize)]
+struct ApproveForm {
+    email: String,
+    origin: String,
+}
+
+async fn approve_redirect(
+    State(state): State<AppState>,
+    axum::extract::Form(form): axum::extract::Form<ApproveForm>,
+) -> impl IntoResponse {
+    // Validate origin to prevent open redirect
+    let origin_url = url::Url::parse(&form.origin).ok();
+    let valid_origin = origin_url
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(|h| h == "oursilverfamily.com" || h.ends_with(".oursilverfamily.com"))
+        .unwrap_or(false);
+    if !valid_origin {
+        return (
+            StatusCode::BAD_REQUEST,
+            [(header::CONTENT_TYPE, "text/plain".to_string())],
+            "Invalid origin".to_string(),
+        );
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let sig = crate::network_secret::sign(&state.network_secret, &form.email, ts);
+    let email_enc = percent_encoding::utf8_percent_encode(
+        &form.email, percent_encoding::NON_ALPHANUMERIC,
+    );
+    let callback = format!(
+        "{}/api/approve-callback?email={}&ts={}&sig={}",
+        form.origin, email_enc, ts, sig,
+    );
+    (
+        StatusCode::SEE_OTHER,
+        [(header::LOCATION, callback)],
+        "".to_string(),
+    )
 }

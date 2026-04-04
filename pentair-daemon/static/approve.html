@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pool - Approve Access</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  background: #0a1628; color: #e2e8f0;
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; padding: 20px;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px; padding: 28px;
+  max-width: 380px; width: 100%; text-align: center;
+}
+.icon { font-size: 40px; margin-bottom: 12px; }
+h2 { font-size: 20px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
+.sub { font-size: 13px; color: #64748b; margin-bottom: 20px; }
+.email {
+  font-size: 15px; color: #38bdf8; font-weight: 600;
+  background: rgba(56,189,248,0.08); border-radius: 10px;
+  padding: 10px 16px; margin: 16px 0; word-break: break-all;
+}
+p { font-size: 14px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5; }
+button {
+  width: 100%; padding: 14px; border-radius: 14px; border: none;
+  font-size: 16px; font-weight: 600; cursor: pointer;
+  background: #38bdf8; color: #0f172a;
+  transition: transform 0.1s;
+}
+button:active { transform: scale(0.97); }
+</style>
+</head><body>
+<div class="card">
+  <div class="icon">🏊</div>
+  <h2>Approve Remote Access</h2>
+  <div class="sub">Pool Controller</div>
+  <div class="email">{{EMAIL}}</div>
+  <p>Allow this account to control the pool from outside the home network.</p>
+  <form method="POST" action="/api/approve">
+    <input type="hidden" name="email" value="{{EMAIL}}">
+    <input type="hidden" name="origin" value="{{ORIGIN}}">
+    <button type="submit">Approve</button>
+  </form>
+</div>
+</body></html>

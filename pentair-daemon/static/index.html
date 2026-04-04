@@ -318,6 +318,23 @@ body {
 .login-btn:hover { background: rgba(255,255,255,0.12); }
 .login-btn svg { width: 20px; height: 20px; }
 .login-error { font-size: 13px; color: #ef4444; max-width: 300px; text-align: center; }
+.approve-gate {
+  position: fixed; inset: 0; z-index: 190;
+  background: var(--bg);
+  display: none; align-items: center; justify-content: center;
+  flex-direction: column; gap: 16px; padding: 20px;
+}
+.approve-gate.visible { display: flex; }
+.approve-icon { font-size: 48px; }
+.approve-title { font-size: 22px; font-weight: 700; color: var(--text-bright); }
+.approve-email { font-size: 15px; color: var(--accent); font-weight: 600; }
+.approve-sub { font-size: 14px; color: var(--text-dim); text-align: center; max-width: 300px; line-height: 1.5; }
+.approve-btn {
+  display: inline-block; padding: 12px 28px; border-radius: 12px;
+  background: var(--accent); color: #0f172a; font-size: 15px; font-weight: 600;
+  text-decoration: none; transition: transform 0.1s; margin-top: 4px;
+}
+.approve-btn:active { transform: scale(0.97); }
 .login-user {
   font-size: 12px; color: var(--text-dim);
   position: absolute; bottom: 12px; left: 0; right: 0;
@@ -339,6 +356,15 @@ body {
   <div class="login-error" id="loginError"></div>
 </div>
 
+<div class="approve-gate" id="approveGate">
+  <div class="approve-icon">🏊</div>
+  <div class="approve-title">Pool Controller</div>
+  <div class="approve-email" id="approveEmail"></div>
+  <div class="approve-sub">You're signed in, but your account hasn't been approved for remote access yet.</div>
+  <div class="approve-sub">If you're on the home WiFi, tap below to approve yourself.</div>
+  <a class="approve-btn" id="approveLink" href="#">Approve My Account</a>
+  <div class="login-user"><a href="#" onclick="firebase.auth().signOut()">Sign out</a></div>
+</div>
 <div class="app">
   <div class="hdr">
     <div class="conn">
@@ -457,8 +483,6 @@ if (needsAuth && typeof firebase !== 'undefined') {
     authDomain: 'unifi-gate.firebaseapp.com',
     projectId: 'unifi-gate'
   });
-  document.getElementById('loginGate').classList.remove('hidden');
-
   firebase.auth().onAuthStateChanged(async (user) => {
     if (user) {
       authToken = await user.getIdToken();
@@ -497,7 +521,32 @@ async function post(p, b) {
 
 async function refresh() {
   try {
-    S = await (await fetch('/api/pool', { headers: authHeaders() })).json();
+    const res = await fetch('/api/pool', { headers: authHeaders() });
+    if (res.status === 403) {
+      const err = await res.json().catch(() => ({}));
+      const email = err.email || '';
+      document.getElementById('approveEmail').textContent = email;
+      const addr = '{{DAEMON_LOCAL}}';
+      const origin = encodeURIComponent(location.origin);
+      const emailEnc = encodeURIComponent(email);
+      document.getElementById('approveLink').href =
+        'http://' + addr + '/approve?email=' + emailEnc + '&origin=' + origin;
+      document.getElementById('approveGate').classList.add('visible');
+      return;
+    }
+    if (!res.ok) {
+      document.getElementById('connDot').classList.add('off');
+      document.getElementById('connText').textContent = 'Error ' + res.status;
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      document.getElementById('connDot').classList.add('off');
+      document.getElementById('connText').textContent = data.error;
+      return;
+    }
+    document.getElementById('approveGate').classList.remove('visible');
+    S = data;
     render();
   } catch {
     document.getElementById('connDot').classList.add('off');
