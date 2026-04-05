@@ -39,12 +39,109 @@ If you have a Pentair IntelliTouch or EasyTouch system with a ScreenLogic adapte
 
 ## Quick Start
 
+### What you need
+
+- A **Pentair IntelliTouch or EasyTouch** system with a **ScreenLogic adapter** on your LAN
+- An always-on machine on the same network (Linux, Mac, Raspberry Pi, etc.)
+- Rust toolchain: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+### Step 1: Build and start the daemon
+
 ```bash
+git clone https://github.com/scottmsilver/pentair.git
+cd pentair
 cargo build --release --workspace
-cargo run -p pentair-daemon  # auto-discovers your adapter via UDP broadcast
+cargo run --release -p pentair-daemon
 ```
 
-Open `http://localhost:8080` for the web dashboard. The daemon finds your ScreenLogic adapter automatically, starts polling, and serves everything from a single binary with no external dependencies.
+You should see something like:
+
+```
+starting pentair-daemon, binding to 0.0.0.0:8080
+connecting to adapter...
+connected to ScreenLogic adapter at 192.168.1.89:80
+```
+
+If the daemon can't find your adapter, set the host explicitly: `PENTAIR_HOST=192.168.1.89 cargo run --release -p pentair-daemon`
+
+### Step 2: Check the web dashboard
+
+Open **http://localhost:8080** in a browser. You should see your pool and spa temperatures, light controls, and the current state of your system. Try toggling something -- it should respond within a second.
+
+### Step 3: Add Google Home (optional)
+
+```bash
+# In a second terminal, start the Matter bridge
+cargo run --release -p pentair-matter
+```
+
+1. Open **http://localhost:8080/matter** to see the pairing QR code
+2. In the Google Home app: **Add device** -> **New device** -> **Matter-enabled device**
+3. Scan the QR code (or enter manual code `3497-0112-332`)
+
+Your pool devices (spa, pool, jets, lights, goodnight) will appear in Google Home. Try: "Hey Google, set Pool Light to blue."
+
+**First time setup:** You need a project in the [Google Home Developer Console](https://console.home.google.com/) with test VID `0xFFF1` and PID `0x8001`. See the [Google Home / Matter](#google-home--matter) section below for details.
+
+### Step 4: Set up mobile apps (optional)
+
+Both apps auto-discover the daemon via mDNS -- no IP address to configure.
+
+**Android:**
+```bash
+cd pentair-android
+./gradlew app:assembleDebug app:installDebug
+```
+
+**iOS** (requires macOS + Xcode):
+```bash
+cd pentair-ios
+open PentairIOS.xcodeproj  # build and run from Xcode
+```
+
+The apps need a Firebase project for push notifications. See [Setup After Cloning](#setup-after-cloning) for config files.
+
+### Step 5: Set up remote access (optional)
+
+To control your pool from outside the house:
+
+1. **Expose the daemon** through a tunnel. The simplest options:
+   - [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/): `cloudflared tunnel --url http://localhost:8080`
+   - [Tailscale](https://tailscale.com/): install on the daemon machine and access via Tailscale IP
+   - Any reverse proxy (Caddy, nginx) with a domain and TLS
+
+2. **Set up Firebase Auth** for the web UI:
+   - Create a Firebase project, enable Google Sign-In
+   - Update the Firebase config in `static/index.html` with your project's credentials
+   - Set the hostname check to your domain
+
+3. **Approve users from home** -- when someone signs in remotely for the first time, they'll see an approval prompt. Open the approval link from any device on your home WiFi to approve them.
+
+### Step 6: Run on boot (optional)
+
+Create a systemd service so the daemon starts automatically:
+
+```bash
+sudo tee /etc/systemd/system/pentair-daemon.service << 'EOF'
+[Unit]
+Description=Pentair Pool Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/path/to/pentair/target/release/pentair-daemon
+Restart=always
+User=your-username
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl enable --now pentair-daemon
+```
+
+For the Matter bridge, create a similar service for `pentair-matter`.
 
 ## What you get
 
