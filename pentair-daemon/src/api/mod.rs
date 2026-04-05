@@ -18,6 +18,7 @@ pub fn create_router(
     scenes: SceneStore,
     network_secret: String,
     daemon_local: String,
+    web: crate::config::WebConfig,
 ) -> Router {
-    routes::router(state, cmd_tx, push_tx, devices, scheduled_heat, scenes, network_secret, daemon_local)
+    routes::router(state, cmd_tx, push_tx, devices, scheduled_heat, scenes, network_secret, daemon_local, web)
 }

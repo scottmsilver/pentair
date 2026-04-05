@@ -1,6 +1,6 @@
 {
   "base_url": "http://127.0.0.1:8083",
-  "samples_file": "/home/ssilver/development/pentair/docs/experiments/spa-heat-runs/2026-03-23-plus-5f-fixed/samples.jsonl",
+  "samples_file": "samples.jsonl",
   "delta_f": 5,
   "trusted_start_temperature": 98,
   "target_temperature": 103,

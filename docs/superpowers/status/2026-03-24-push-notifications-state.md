@@ -12,11 +12,11 @@ Server-side spa heat push notifications, with minimal client work.
 - Android Firebase app created for `com.ssilver.pentair`
 - iOS Firebase app created for `com.ssilver.pentair.ios`
 - Real Android config file present:
-  - [google-services.json](/home/ssilver/development/pentair/pentair-android/app/google-services.json)
+  - [google-services.json](pentair-android/app/google-services.json)
 - Real iOS config file present:
-  - [GoogleService-Info.plist](/home/ssilver/development/pentair/pentair-ios/PentairIOS/GoogleService-Info.plist)
+  - [GoogleService-Info.plist](pentair-ios/PentairIOS/GoogleService-Info.plist)
 - Daemon FCM service account key exists locally at:
-  - `/home/ssilver/.pentair/firebase/pool-eb7ed-pentair-daemon-fcm.json`
+  - `~/.pentair/firebase/pool-eb7ed-pentair-daemon-fcm.json`
 - Live daemon config file points at that Firebase project/key:
   - `/tmp/pentair-daemon-8080.toml`
 
@@ -34,33 +34,33 @@ Server-side spa heat push notifications, with minimal client work.
 - Android app has real Firebase config.
 - Android token registration was tightened so the app does not rely only on `onNewToken`.
 - Relevant Android files:
-  - [DeviceTokenManager.kt](/home/ssilver/development/pentair/pentair-android/app/src/main/java/com/ssilver/pentair/data/DeviceTokenManager.kt)
-  - [MessagingTokenProvider.kt](/home/ssilver/development/pentair/pentair-android/app/src/main/java/com/ssilver/pentair/data/MessagingTokenProvider.kt)
-  - [DeviceRegistrationClient.kt](/home/ssilver/development/pentair/pentair-android/app/src/main/java/com/ssilver/pentair/data/DeviceRegistrationClient.kt)
-  - [DaemonDiscovery.kt](/home/ssilver/development/pentair/pentair-android/app/src/main/java/com/ssilver/pentair/discovery/DaemonDiscovery.kt)
-  - [PoolApp.kt](/home/ssilver/development/pentair/pentair-android/app/src/main/java/com/ssilver/pentair/PoolApp.kt)
-  - [DeviceTokenManagerTest.kt](/home/ssilver/development/pentair/pentair-android/app/src/test/java/com/ssilver/pentair/data/DeviceTokenManagerTest.kt)
+  - [DeviceTokenManager.kt](pentair-android/app/src/main/java/com/ssilver/pentair/data/DeviceTokenManager.kt)
+  - [MessagingTokenProvider.kt](pentair-android/app/src/main/java/com/ssilver/pentair/data/MessagingTokenProvider.kt)
+  - [DeviceRegistrationClient.kt](pentair-android/app/src/main/java/com/ssilver/pentair/data/DeviceRegistrationClient.kt)
+  - [DaemonDiscovery.kt](pentair-android/app/src/main/java/com/ssilver/pentair/discovery/DaemonDiscovery.kt)
+  - [PoolApp.kt](pentair-android/app/src/main/java/com/ssilver/pentair/PoolApp.kt)
+  - [DeviceTokenManagerTest.kt](pentair-android/app/src/test/java/com/ssilver/pentair/data/DeviceTokenManagerTest.kt)
 - Verified earlier in this session:
   - `./gradlew app:testDebugUnitTest app:assembleDebug` passed
   - latest Android build was installed to the Pixel and launched
 - Not yet verified:
   - device token registration back to daemon
 - Current evidence:
-  - `/home/ssilver/.pentair/devices.json` does not exist yet
+  - `~/.pentair/devices.json` does not exist yet
 
 ## iOS State
 
 - Minimal iOS push wiring is partially implemented but not verified yet.
 - New iOS files added:
-  - [NotificationTokenManager.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/NotificationTokenManager.swift)
-  - [PoolAppDelegate.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PoolAppDelegate.swift)
-  - [PentairIOS.entitlements](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PentairIOS.entitlements)
-  - [NotificationTokenManagerTests.swift](/home/ssilver/development/pentair/pentair-ios/Tests/NotificationTokenManagerTests.swift)
+  - [NotificationTokenManager.swift](pentair-ios/PentairIOS/NotificationTokenManager.swift)
+  - [PoolAppDelegate.swift](pentair-ios/PentairIOS/PoolAppDelegate.swift)
+  - [PentairIOS.entitlements](pentair-ios/PentairIOS/PentairIOS.entitlements)
+  - [NotificationTokenManagerTests.swift](pentair-ios/Tests/NotificationTokenManagerTests.swift)
 - Existing iOS files modified:
-  - [PentairIOSApp.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PentairIOSApp.swift)
-  - [PoolViewModel.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PoolViewModel.swift)
-  - [Info.plist](/home/ssilver/development/pentair/pentair-ios/PentairIOS/Info.plist)
-  - [project.pbxproj](/home/ssilver/development/pentair/pentair-ios/PentairIOS.xcodeproj/project.pbxproj)
+  - [PentairIOSApp.swift](pentair-ios/PentairIOS/PentairIOSApp.swift)
+  - [PoolViewModel.swift](pentair-ios/PentairIOS/PoolViewModel.swift)
+  - [Info.plist](pentair-ios/PentairIOS/Info.plist)
+  - [project.pbxproj](pentair-ios/PentairIOS.xcodeproj/project.pbxproj)
 - Token-manager test passed on the Mac toolchain:
   - compiled `NotificationTokenManager.swift` + test harness with `swiftc`
   - ran `/tmp/notification-token-manager-tests`
@@ -95,17 +95,17 @@ Current `git status` includes:
 - local experimental heat-estimator history file dirtied again
 
 Notable uncommitted files:
-- [pentair-daemon/src/spa_notifications.rs](/home/ssilver/development/pentair/pentair-daemon/src/spa_notifications.rs)
-- [pentair-ios/PentairIOS/GoogleService-Info.plist](/home/ssilver/development/pentair/pentair-ios/PentairIOS/GoogleService-Info.plist)
-- [pentair-ios/PentairIOS/NotificationTokenManager.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/NotificationTokenManager.swift)
-- [pentair-ios/PentairIOS/PoolAppDelegate.swift](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PoolAppDelegate.swift)
-- [pentair-ios/PentairIOS/PentairIOS.entitlements](/home/ssilver/development/pentair/pentair-ios/PentairIOS/PentairIOS.entitlements)
+- [pentair-daemon/src/spa_notifications.rs](pentair-daemon/src/spa_notifications.rs)
+- [pentair-ios/PentairIOS/GoogleService-Info.plist](pentair-ios/PentairIOS/GoogleService-Info.plist)
+- [pentair-ios/PentairIOS/NotificationTokenManager.swift](pentair-ios/PentairIOS/NotificationTokenManager.swift)
+- [pentair-ios/PentairIOS/PoolAppDelegate.swift](pentair-ios/PentairIOS/PoolAppDelegate.swift)
+- [pentair-ios/PentairIOS/PentairIOS.entitlements](pentair-ios/PentairIOS/PentairIOS.entitlements)
 
 ## Next Steps
 
 1. Debug why `pentair-daemon` exits immediately after startup when run with the current config.
 2. Once daemon stays up:
-   - relaunch Android app and confirm `/home/ssilver/.pentair/devices.json` appears
+   - relaunch Android app and confirm `~/.pentair/devices.json` appears
    - verify FCM send path with a test notification
 3. Resolve Firebase Swift package on the Mac and complete an iOS simulator build.
 4. Install/run the iOS app on device and confirm token registration to daemon.
@@ -116,7 +116,7 @@ Notable uncommitted files:
 Check daemon health:
 
 ```bash
-ps -ef | grep '/home/ssilver/development/pentair/target/release/pentair-daemon' | grep -v grep
+ps -ef | grep 'target/release/pentair-daemon' | grep -v grep
 ss -ltnp '( sport = :8080 )'
 tail -n 80 /tmp/pentair-daemon-8080.log
 ```
@@ -124,13 +124,13 @@ tail -n 80 /tmp/pentair-daemon-8080.log
 Start daemon with current live config:
 
 ```bash
-PENTAIR_CONFIG=/tmp/pentair-daemon-8080.toml /home/ssilver/development/pentair/target/release/pentair-daemon
+PENTAIR_CONFIG=/tmp/pentair-daemon-8080.toml target/release/pentair-daemon
 ```
 
 Check Android token registration:
 
 ```bash
-cat /home/ssilver/.pentair/devices.json
+cat ~/.pentair/devices.json
 ```
 
 Mac iOS build path:
@@ -184,7 +184,7 @@ Typical flow:
 
 ```bash
 rsync -az -e 'ssh -i /tmp/pentair-mac -p 2222' \
-  /home/ssilver/development/pentair/pentair-android/app/build/outputs/apk/debug/app-debug.apk \
+  pentair-android/app/build/outputs/apk/debug/app-debug.apk \
   ssilver@localhost:/Users/ssilver/development/pentair/pentair-android/app/build/outputs/apk/debug/app-debug.apk
 
 ssh -i /tmp/pentair-mac -p 2222 ssilver@localhost '

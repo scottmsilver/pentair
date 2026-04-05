@@ -2,7 +2,8 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8083}"
-OUT_DIR="${OUT_DIR:-/home/ssilver/development/pentair/docs/experiments/spa-heat-runs/2026-03-23-90f}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT_DIR="${OUT_DIR:-${SCRIPT_DIR}}"
 TARGET_TEMP="${TARGET_TEMP:-90}"
 RESTORE_SETPOINT="${RESTORE_SETPOINT:-100}"
 RESTORE_MODE="${RESTORE_MODE:-heat-pump}"

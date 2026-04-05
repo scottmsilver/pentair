@@ -8,6 +8,9 @@ Cargo.lock
 .DS_Store
 .gstack/
 
+# Instance-specific config (use pentair.toml.example as template)
+pentair.toml
+
 # Android
 pentair-android/.gradle/
 pentair-android/build/
@@ -25,3 +28,6 @@ pentair-ios/PentairIOS.xcodeproj/project.xcworkspace/xcuserdata/
 # Firebase config (contains project-specific API keys)
 pentair-android/app/google-services.json
 pentair-ios/PentairIOS/GoogleService-Info.plist
+
+# Instance-specific build configs (use .example files as templates)
+pentair-ios/Instance.xcconfig

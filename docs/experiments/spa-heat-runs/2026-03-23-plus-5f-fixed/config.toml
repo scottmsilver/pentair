@@ -3,7 +3,7 @@ bind = "127.0.0.1:8083"
 
 [heating]
 enabled = true
-history_path = "/home/ssilver/development/pentair/docs/experiments/spa-heat-runs/2026-03-23-plus-5f-fixed/heat-estimator-store.json"
+history_path = "heat-estimator-store.json"
 sample_window_minutes = 180
 minimum_runtime_minutes = 10
 minimum_temp_rise_f = 1.0

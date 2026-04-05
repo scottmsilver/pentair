@@ -473,15 +473,16 @@ const MODES = ['swim','party','romantic','caribbean','american','sunset','royal'
 let S = null, setB = null, setV = 0;
 
 // ── Auth ─────────────────────────────────
-// Only activate Firebase auth when accessed via the tunnel (not on LAN)
-const needsAuth = location.hostname.endsWith('oursilverfamily.com');
+// Only activate Firebase auth when accessed via the tunnel (not on LAN).
+// Guard: endsWith('') is true for any string, so empty REMOTE_DOMAIN disables auth.
+const needsAuth = '{{REMOTE_DOMAIN}}' !== '' && location.hostname.endsWith('{{REMOTE_DOMAIN}}');
 let authToken = null;
 
 if (needsAuth && typeof firebase !== 'undefined') {
   firebase.initializeApp({
-    apiKey: 'AIzaSyBJaoKKXRMVWqd2EvwITrUKfZKplgGbsd0',
-    authDomain: 'unifi-gate.firebaseapp.com',
-    projectId: 'unifi-gate'
+    apiKey: '{{FIREBASE_API_KEY}}',
+    authDomain: '{{FIREBASE_AUTH_DOMAIN}}',
+    projectId: '{{FIREBASE_PROJECT_ID}}'
   });
   firebase.auth().onAuthStateChanged(async (user) => {
     if (user) {

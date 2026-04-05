@@ -1,0 +1,21 @@
+# Pentair daemon configuration
+# Copy this to pentair.toml and fill in your values.
+# Credentials are stored in ~/.pentair/firebase/ (not checked in)
+
+[fcm]
+service_account = "~/.pentair/firebase/your-project-fcm.json"
+project_id = "your-firebase-project"
+
+[apns]
+key_id = "XXXXXXXXXX"
+team_id = "XXXXXXXXXX"
+key_path = "~/.pentair/firebase/AuthKey_XXXXXXXXXX.p8"
+bundle_id = "com.yourname.pentair.ios"
+
+[web]
+remote_domain = "yourdomain.com"
+
+[web.firebase]
+api_key = ""
+auth_domain = ""
+project_id = ""

@@ -200,7 +200,7 @@ Otherwise a client can keep showing an old ETA/countdown/staleness line until th
 ## Documentation
 
 Key docs:
-- [README.md](/home/ssilver/development/pentair/README.md)
-- [docs/api-spec.md](/home/ssilver/development/pentair/docs/api-spec.md)
-- [docs/designs/heat-up-estimation.md](/home/ssilver/development/pentair/docs/designs/heat-up-estimation.md)
-- [docs/protocol-reference.md](/home/ssilver/development/pentair/docs/protocol-reference.md)
+- [README.md](README.md)
+- [docs/api-spec.md](docs/api-spec.md)
+- [docs/designs/heat-up-estimation.md](docs/designs/heat-up-estimation.md)
+- [docs/protocol-reference.md](docs/protocol-reference.md)

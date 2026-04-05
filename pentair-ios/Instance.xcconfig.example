@@ -1,0 +1,5 @@
+// Instance-specific build settings.
+// Copy this to Instance.xcconfig and fill in your values.
+PRODUCT_BUNDLE_IDENTIFIER = com.yourname.pentair.ios
+DEVELOPMENT_TEAM = XXXXXXXXXX
+WIDGET_BUNDLE_IDENTIFIER = com.yourname.pentair.ios.SpaHeatWidget

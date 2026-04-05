@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, daemon_local);
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, daemon_local, config.web.clone());
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);

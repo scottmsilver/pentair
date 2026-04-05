@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "com.ssilver.pentair"
+    namespace = project.property("APPLICATION_ID").toString()
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.ssilver.pentair"
+        applicationId = project.property("APPLICATION_ID").toString()
         minSdk = 26
         targetSdk = 35
         versionCode = 1

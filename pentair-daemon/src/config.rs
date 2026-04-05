@@ -48,6 +48,9 @@ pub struct Config {
     /// ```
     #[serde(default)]
     pub scenes: Vec<SceneConfig>,
+
+    #[serde(default)]
+    pub web: WebConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -74,6 +77,24 @@ pub struct ApnsConfig {
 
 fn default_apns_environment() -> String {
     "development".to_string()
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WebConfig {
+    #[serde(default)]
+    pub remote_domain: String,
+    #[serde(default)]
+    pub firebase: WebFirebaseConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WebFirebaseConfig {
+    #[serde(default)]
+    pub api_key: String,
+    #[serde(default)]
+    pub auth_domain: String,
+    #[serde(default)]
+    pub project_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +236,7 @@ impl Default for Config {
             heating: Default::default(),
             notifications: Default::default(),
             scenes: Default::default(),
+            web: Default::default(),
         }
     }
 }
@@ -375,5 +397,66 @@ mod config_tests {
         assert_eq!(config.scenes[0].commands[2].value.as_deref(), Some("caribbean"));
         assert_eq!(config.scenes[1].name, "all-off");
         assert_eq!(config.scenes[1].commands.len(), 2);
+    }
+
+    #[test]
+    fn web_config_defaults_to_empty() {
+        let config: Config = toml::from_str("").expect("default config should deserialize");
+        assert_eq!(config.web.remote_domain, "");
+        assert_eq!(config.web.firebase.api_key, "");
+        assert_eq!(config.web.firebase.auth_domain, "");
+        assert_eq!(config.web.firebase.project_id, "");
+    }
+
+    #[test]
+    fn web_config_full() {
+        let config: Config = toml::from_str(
+            r#"
+            [web]
+            remote_domain = "example.com"
+
+            [web.firebase]
+            api_key = "AIzaTest123"
+            auth_domain = "myapp.firebaseapp.com"
+            project_id = "myapp-12345"
+            "#,
+        )
+        .expect("full web config should deserialize");
+        assert_eq!(config.web.remote_domain, "example.com");
+        assert_eq!(config.web.firebase.api_key, "AIzaTest123");
+        assert_eq!(config.web.firebase.auth_domain, "myapp.firebaseapp.com");
+        assert_eq!(config.web.firebase.project_id, "myapp-12345");
+    }
+
+    #[test]
+    fn web_config_partial_domain_only() {
+        let config: Config = toml::from_str(
+            r#"
+            [web]
+            remote_domain = "example.com"
+            "#,
+        )
+        .expect("partial web config should deserialize");
+        assert_eq!(config.web.remote_domain, "example.com");
+        assert_eq!(config.web.firebase.api_key, "");
+        assert_eq!(config.web.firebase.auth_domain, "");
+        assert_eq!(config.web.firebase.project_id, "");
+    }
+
+    #[test]
+    fn web_firebase_config_parses() {
+        let config: Config = toml::from_str(
+            r#"
+            [web.firebase]
+            api_key = "test-key"
+            auth_domain = "test.firebaseapp.com"
+            project_id = "test-project"
+            "#,
+        )
+        .expect("firebase-only web config should deserialize");
+        assert_eq!(config.web.remote_domain, "");
+        assert_eq!(config.web.firebase.api_key, "test-key");
+        assert_eq!(config.web.firebase.auth_domain, "test.firebaseapp.com");
+        assert_eq!(config.web.firebase.project_id, "test-project");
     }
 }

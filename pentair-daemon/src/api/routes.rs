@@ -27,6 +27,7 @@ pub struct AppState {
     pub scenes: SceneStore,
     pub network_secret: String,
     pub daemon_local: String,
+    pub web: crate::config::WebConfig,
 }
 
 pub fn router(
@@ -38,6 +39,7 @@ pub fn router(
     scenes: SceneStore,
     network_secret: String,
     daemon_local: String,
+    web: crate::config::WebConfig,
 ) -> Router {
     let state = AppState {
         shared,
@@ -48,6 +50,7 @@ pub fn router(
         scenes,
         network_secret,
         daemon_local,
+        web,
     };
 
     Router::new()
@@ -101,7 +104,17 @@ pub fn router(
 // ── Web UI ──────────────────────────────────────────────────────────────
 
 async fn serve_ui(State(state): State<AppState>) -> impl IntoResponse {
-    let html = INDEX_HTML.replace("{{DAEMON_LOCAL}}", &state.daemon_local);
+    let replacements = [
+        ("{{DAEMON_LOCAL}}", state.daemon_local.as_str()),
+        ("{{FIREBASE_API_KEY}}", state.web.firebase.api_key.as_str()),
+        ("{{FIREBASE_AUTH_DOMAIN}}", state.web.firebase.auth_domain.as_str()),
+        ("{{FIREBASE_PROJECT_ID}}", state.web.firebase.project_id.as_str()),
+        ("{{REMOTE_DOMAIN}}", state.web.remote_domain.as_str()),
+    ];
+    let mut html = INDEX_HTML.to_string();
+    for (key, value) in &replacements {
+        html = html.replace(key, value);
+    }
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/html")],
@@ -1002,6 +1015,20 @@ async fn serve_approve_page(
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
+/// Validate that a redirect origin matches the configured remote domain.
+/// Empty remote_domain rejects all origins (safe default for LAN-only use).
+fn is_valid_redirect_origin(origin: &str, remote_domain: &str) -> bool {
+    if remote_domain.is_empty() {
+        return false;
+    }
+    let origin_url = url::Url::parse(origin).ok();
+    origin_url
+        .as_ref()
+        .and_then(|u| u.host_str())
+        .map(|h| h == remote_domain || h.ends_with(&format!(".{}", remote_domain)))
+        .unwrap_or(false)
+}
+
 #[derive(Deserialize)]
 struct ApproveForm {
     email: String,
@@ -1012,13 +1039,7 @@ async fn approve_redirect(
     State(state): State<AppState>,
     axum::extract::Form(form): axum::extract::Form<ApproveForm>,
 ) -> impl IntoResponse {
-    // Validate origin to prevent open redirect
-    let origin_url = url::Url::parse(&form.origin).ok();
-    let valid_origin = origin_url
-        .as_ref()
-        .and_then(|u| u.host_str())
-        .map(|h| h == "oursilverfamily.com" || h.ends_with(".oursilverfamily.com"))
-        .unwrap_or(false);
+    let valid_origin = is_valid_redirect_origin(&form.origin, &state.web.remote_domain);
     if !valid_origin {
         return (
             StatusCode::BAD_REQUEST,
@@ -1043,4 +1064,48 @@ async fn approve_redirect(
         [(header::LOCATION, callback)],
         "".to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approve_rejects_wrong_domain() {
+        assert!(!is_valid_redirect_origin("https://evil.com/callback", "example.com"));
+    }
+
+    #[test]
+    fn approve_accepts_configured_domain() {
+        assert!(is_valid_redirect_origin("https://example.com/callback", "example.com"));
+    }
+
+    #[test]
+    fn approve_accepts_subdomain() {
+        assert!(is_valid_redirect_origin("https://pool.example.com/callback", "example.com"));
+    }
+
+    #[test]
+    fn approve_rejects_all_when_domain_empty() {
+        assert!(!is_valid_redirect_origin("https://example.com/callback", ""));
+        assert!(!is_valid_redirect_origin("https://anything.com", ""));
+        assert!(!is_valid_redirect_origin("https://localhost", ""));
+    }
+
+    #[test]
+    fn approve_rejects_suffix_attack() {
+        // "evilexample.com" ends with "example.com" as a string, but is not a subdomain
+        assert!(!is_valid_redirect_origin("https://evilexample.com/callback", "example.com"));
+    }
+
+    #[test]
+    fn serve_ui_substitutes_all_vars() {
+        // Verify the template vars exist in the raw HTML
+        let html = INDEX_HTML;
+        assert!(html.contains("{{DAEMON_LOCAL}}"));
+        assert!(html.contains("{{FIREBASE_API_KEY}}"));
+        assert!(html.contains("{{FIREBASE_AUTH_DOMAIN}}"));
+        assert!(html.contains("{{FIREBASE_PROJECT_ID}}"));
+        assert!(html.contains("{{REMOTE_DOMAIN}}"));
+    }
 }

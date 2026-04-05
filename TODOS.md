@@ -6,6 +6,15 @@
 **Completed:** v0.1.0 (2026-03-18)
 **Spec:** `docs/api-spec.md`
 
+## P1 — Public/Private Repo Split
+
+### Verification grep after pentair-instance creation
+**What:** Run `grep -r "oursilverfamily\|AIzaSy\|pool-eb7ed\|unifi-gate\|CMMDZ3CMW8\|M8B368H9T5\|com.ssilver" .` on the public repo after PR 2 lands to confirm zero instance-specific strings remain (excluding .example files).
+**Why:** Safety net for the repo split. Easy to miss a hardcoded value during templatization.
+**Context:** PR 1 templatizes the public repo (config.rs `[web]` + `[web.firebase]`, routes.rs template substitution loop, index.html vars). PR 2 creates the pentair-instance repo. This grep runs after PR 2 to confirm the split is clean. Pattern is in the plan's Verification section (`.claude/plans/playful-cuddling-lemon.md`).
+**Effort:** S (30 seconds)
+**Depends on:** PR 1 (templatize public repo) complete.
+
 ## P2 — Google Home Matter Bridge v2 (deferred from v1 by eng review)
 
 ### Timed heating ("have spa ready at 7pm")
