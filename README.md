@@ -37,7 +37,7 @@
 | **Protocol** | Reverse-engineered wire protocol | Binary encode/decode, semantic model, zero vendor SDK. Tested against 24 captured packet fixtures. |
 | **Daemon** | REST + WebSocket server | Auto-discovers your adapter via UDP broadcast. Semantic API, embedded web UI, smart behaviors (jets auto-enable spa, spa-off kills jets). |
 | **Mobile** | Native iOS + Android apps | SwiftUI and Jetpack Compose. Real-time updates via WebSocket. Push notifications when your spa is ready, with heating ETA. |
-| **Google Home** | Matter bridge sidecar | Spa thermostat, jets, 12 IntelliBrite light modes. "Hey Google, warm the spa." Zero daemon changes needed. |
+| **Google Home** | Matter bridge sidecar | Spa + pool thermostats (Fahrenheit), jets switch, 12 IntelliBrite color modes, goodnight scene. "Hey Google, set Pool Light to blue." |
 
 ## Architecture
 
@@ -144,6 +144,36 @@ The daemon sends FCM push notifications for spa heating milestones:
 - **At Temperature** -- spa has reached the setpoint
 
 Heating ETA is computed server-side by combining configured heater specs, learned rates from prior sessions, and live observed data.
+
+## Google Home / Matter
+
+The `pentair-matter` sidecar bridges the pool to Google Home via the Matter protocol. It connects to the daemon's REST/WebSocket API and requires zero daemon changes.
+
+```bash
+# Start the daemon first, then the Matter bridge
+cargo run -p pentair-daemon
+cargo run -p pentair-matter
+```
+
+**Pairing:** Open `http://localhost:8080/matter` for a scannable QR code, or enter manual code `3497-0112-332` in the Google Home app.
+
+**Devices exposed to Google Home:**
+
+| Device | Type | Controls |
+|--------|------|----------|
+| Spa | Thermostat | Temperature, setpoint (Fahrenheit), heat on/off |
+| Pool | Thermostat | Temperature, setpoint (Fahrenheit), heat on/off |
+| Jets | Switch | On/off (auto-enables spa via daemon smart behavior) |
+| Pool Light | Extended Color Light | On/off, 12 IntelliBrite modes via color wheel |
+| Goodnight | Switch | Momentary on/off scene trigger |
+
+**Voice commands:** "Hey Google, set Pool Light to blue", "Hey Google, set Spa to 104", "Hey Google, turn on Jets"
+
+**Light color mapping:** The IntelliBrite pool light has 12 preset modes (swim, party, caribbean, blue, green, etc.), not a continuous color spectrum. The color wheel in Google Home snaps to the nearest mode. Color temperature commands map to the "white" mode.
+
+**Known limitation:** Google Home does not support the Matter ModeSelect cluster, so the 12 light modes are presented as a color wheel rather than a named list. chip-tool and Apple Home can access the named modes via ModeSelect.
+
+**Note:** This uses test Matter credentials (VID 0xFFF1, PID 0x8001). The [Google Home Developer Console](https://console.home.google.com/) must have a project configured with these test VID/PID for pairing to work.
 
 ## Setup After Cloning
 
