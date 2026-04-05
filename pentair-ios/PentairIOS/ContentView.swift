@@ -249,12 +249,25 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             } else if matter != nil && matter?.canReset == false {
                 if let code = matter?.pairingCode {
-                    Text("Ready to pair. In Google Home: + > New device > Matter-enabled device")
+                    Text("Ready to pair. In Google Home: + > New device > Matter-enabled device.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Manual code: \(code)")
-                        .font(.title3.monospaced().bold())
-                        .foregroundStyle(.blue)
+                    if let base = viewModel.activeAddress {
+                        Link("Scan QR code at \(base)/matter", destination: URL(string: "\(base)/matter")!)
+                            .font(.caption)
+                    }
+                    HStack {
+                        Text(code)
+                            .font(.title3.monospaced().bold())
+                            .foregroundStyle(.blue)
+                        Spacer()
+                        Button {
+                            UIPasteboard.general.string = code
+                        } label: {
+                            Label("Copy", systemImage: "doc.on.doc")
+                                .font(.caption)
+                        }
+                    }
                 } else {
                     Text("Not paired yet.")
                         .font(.caption)

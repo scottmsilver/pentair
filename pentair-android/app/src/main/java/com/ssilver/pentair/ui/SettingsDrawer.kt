@@ -226,18 +226,49 @@ fun SettingsDrawer(
                 }
             } else if (matter != null && !matter.canReset) {
                 if (matter.pairingCode != null) {
+                    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+                    var copied by remember { mutableStateOf(false) }
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     Text(
-                        text = "Ready to pair. In Google Home: + > New device > Matter-enabled device",
+                        text = "Ready to pair. In Google Home: + > New device > Matter-enabled device.",
                         fontSize = 13.sp,
                         color = TextDim,
                     )
+                    if (activeAddress != null) {
+                        TextButton(
+                            onClick = {
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("$activeAddress/matter"))
+                                context.startActivity(intent)
+                            },
+                            modifier = Modifier.align(Alignment.Start),
+                        ) {
+                            Text("Scan QR code at $activeAddress/matter")
+                        }
+                    }
                     Spacer(modifier = Modifier.size(4.dp))
-                    Text(
-                        text = "Manual code: ${matter.pairingCode}",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Accent,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = matter.pairingCode,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Accent,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Button(
+                            onClick = {
+                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(matter.pairingCode))
+                                copied = true
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = if (copied) Color(0x4038BDF8) else Accent,
+                            ),
+                        ) {
+                            Text(if (copied) "Copied" else "Copy")
+                        }
+                    }
                 } else {
                     Text(
                         text = "Not paired yet.",

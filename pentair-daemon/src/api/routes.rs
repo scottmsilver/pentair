@@ -716,32 +716,20 @@ pub fn matter_manual_code() -> String {
     std::env::var("MATTER_MANUAL_CODE").unwrap_or_else(|_| DEFAULT_MATTER_MANUAL_CODE.to_string())
 }
 
-async fn matter_qr() -> impl IntoResponse {
+fn generate_matter_qr_png() -> Result<Vec<u8>, String> {
     let setup_code = matter_setup_code();
-    let qr = match qrcode::QrCode::new(setup_code.as_bytes()) {
-        Ok(q) => q,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                [(header::CONTENT_TYPE, "text/plain")],
-                format!("failed to generate QR code: {}", e).into_bytes(),
-            );
-        }
-    };
+    let qr = qrcode::QrCode::new(setup_code.as_bytes()).map_err(|e| format!("QR: {e}"))?;
     let image = qr.render::<image::Luma<u8>>().quiet_zone(true).build();
     let mut png_bytes = std::io::Cursor::new(Vec::new());
-    if let Err(e) = image.write_to(&mut png_bytes, image::ImageFormat::Png) {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/plain")],
-            format!("failed to encode PNG: {}", e).into_bytes(),
-        );
+    image.write_to(&mut png_bytes, image::ImageFormat::Png).map_err(|e| format!("PNG: {e}"))?;
+    Ok(png_bytes.into_inner())
+}
+
+async fn matter_qr() -> impl IntoResponse {
+    match generate_matter_qr_png() {
+        Ok(png) => (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], png),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, [(header::CONTENT_TYPE, "text/plain")], e.into_bytes()),
     }
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png")],
-        png_bytes.into_inner(),
-    )
 }
 
 async fn matter_recommission(State(state): State<AppState>) -> impl IntoResponse {
@@ -1029,7 +1017,18 @@ struct ApproveQuery {
 }
 
 async fn serve_matter_page() -> impl IntoResponse {
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], MATTER_HTML)
+    use base64::Engine;
+    let qr_data_url = match generate_matter_qr_png() {
+        Ok(png) => {
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+            format!("data:image/png;base64,{}", b64)
+        }
+        Err(_) => String::new(),
+    };
+    let html = MATTER_HTML
+        .replace("/api/matter/qr", &qr_data_url)
+        .replace("{{MANUAL_CODE}}", &matter_manual_code());
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
 async fn serve_approve_page(

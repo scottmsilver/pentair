@@ -68,7 +68,8 @@ a:hover { text-decoration: underline; }
   </div>
 
   <div class="label">Or enter manually</div>
-  <div class="manual-code" id="manualCode">loading...</div>
+  <div class="manual-code" id="manualCode" onclick="copyCode()" style="cursor:pointer" title="Tap to copy">{{MANUAL_CODE}}</div>
+  <div class="sub" id="copyStatus"></div>
 
   <hr class="divider">
 
@@ -91,14 +92,23 @@ a:hover { text-decoration: underline; }
 </div>
 
 <script>
-fetch('/api/matter/info')
-  .then(r => r.json())
-  .then(info => {
-    document.getElementById('manualCode').textContent = info.manual_code || '—';
-  })
-  .catch(() => {
-    document.getElementById('manualCode').textContent = '—';
+function copyCode() {
+  const code = document.getElementById('manualCode').textContent;
+  if (!code || code === '—' || code === 'loading...') return;
+  navigator.clipboard.writeText(code).then(() => {
+    document.getElementById('copyStatus').textContent = 'Copied!';
+    setTimeout(() => { document.getElementById('copyStatus').textContent = ''; }, 2000);
+  }).catch(() => {
+    // Fallback for non-HTTPS contexts
+    const ta = document.createElement('textarea');
+    ta.value = code; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    document.getElementById('copyStatus').textContent = 'Copied!';
+    setTimeout(() => { document.getElementById('copyStatus').textContent = ''; }, 2000);
   });
+}
 
 function recommission() {
   if (!confirm('Reset Matter pairing? You will need to re-add pool devices in Google Home.')) return;
