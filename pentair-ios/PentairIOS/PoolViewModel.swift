@@ -5,7 +5,11 @@ import OSLog
 @MainActor
 final class PoolViewModel: ObservableObject {
     private static let logger = Logger(subsystem: "com.ssilver.pentair.ios", category: "client")
-    private let decoder = JSONDecoder()
+    private let decoder: JSONDecoder = {
+        let d = JSONDecoder()
+        d.keyDecodingStrategy = .convertFromSnakeCase
+        return d
+    }()
 
     @Published var system: PoolSystem?
     @Published var connectionState: ConnectionState = .discovering
@@ -115,7 +119,7 @@ final class PoolViewModel: ObservableObject {
             let pool = try await PoolAPI(baseURL: url).fetchPool()
             recordDiagnostic(
                 "probe",
-                "Success. Controller \(pool.system.controller), air \(pool.system.airTemperature)\(temperatureSymbol(for: pool.system))"
+                "Success. Controller \(pool.system?.controller ?? "unknown"), air \(pool.system?.airTemperature ?? 0)\(temperatureSymbol(for: pool.system))"
             )
             presentBanner("Connection OK: \(url.absoluteString)")
         } catch {
@@ -148,7 +152,7 @@ final class PoolViewModel: ObservableObject {
             current.updating(
                 pool: current.pool?.optimisticCommand(
                     on: turnOn,
-                    sharedPump: current.system.poolSpaSharedPump
+                    sharedPump: current.system?.poolSpaSharedPump ?? true
                 )
             )
         }
@@ -191,19 +195,19 @@ final class PoolViewModel: ObservableObject {
                 nextSpa = current.spa?.optimisticCommand(
                     on: false,
                     accessories: current.spa?.accessories.mapValues { _ in false } ?? [:],
-                    sharedPump: current.system.poolSpaSharedPump
+                    sharedPump: current.system?.poolSpaSharedPump ?? true
                 )
             case .spa:
                 nextSpa = current.spa?.optimisticCommand(
                     on: true,
                     accessories: current.spa?.accessories.mapValues { _ in false } ?? [:],
-                    sharedPump: current.system.poolSpaSharedPump
+                    sharedPump: current.system?.poolSpaSharedPump ?? true
                 )
             case .jets:
                 nextSpa = current.spa?.optimisticCommand(
                     on: true,
                     accessories: (current.spa?.accessories ?? [:]).merging(["jets": true]) { _, new in new },
-                    sharedPump: current.system.poolSpaSharedPump
+                    sharedPump: current.system?.poolSpaSharedPump ?? true
                 )
             }
 
@@ -327,6 +331,15 @@ final class PoolViewModel: ObservableObject {
 
         Task {
             await sendCommand(path: "/api/goodnight", pendingMutationID: pendingMutationID)
+        }
+    }
+
+    func matterRecommission() async {
+        recordDiagnostic("matter", "Recommission requested")
+        do {
+            try await api?.post("/api/matter/recommission")
+        } catch {
+            recordDiagnostic("matter", "Recommission failed: \(error.localizedDescription)")
         }
     }
 
@@ -753,7 +766,7 @@ final class PoolViewModel: ObservableObject {
         PoolViewModel.logger.info("[\(category, privacy: .public)] \(message, privacy: .public)")
     }
 
-    private func temperatureSymbol(for system: SystemInfo) -> String {
-        system.tempUnit == "c" ? "C" : "F"
+    private func temperatureSymbol(for system: SystemInfo?) -> String {
+        system?.tempUnit == "c" ? "C" : "F"
     }
 }

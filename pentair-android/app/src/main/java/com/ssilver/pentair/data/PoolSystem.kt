@@ -1,5 +1,6 @@
 package com.ssilver.pentair.data
 
+import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
@@ -11,6 +12,15 @@ data class PoolSystem(
     val pump: PumpInfo?,
     val system: SystemInfo,
     val goodnight_available: Boolean = false,
+    val matter: MatterStatus? = null,
+)
+
+@JsonClass(generateAdapter = true)
+data class MatterStatus(
+    val commissioned: Boolean,
+    @Json(name = "status_display") val statusDisplay: String,
+    @Json(name = "can_reset") val canReset: Boolean,
+    @Json(name = "pairing_code") val pairingCode: String? = null,
 )
 
 @JsonClass(generateAdapter = true)

@@ -189,6 +189,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             isTestingAddress = isTestingAddress,
             diagnostics = diagnostics,
             useClassicUi = useClassicUi,
+            matter = system?.matter,
             onManualAddressChange = viewModel::setManualAddress,
             onApplyManualAddress = viewModel::applyManualAddress,
             onUseDiscoveredAddress = viewModel::useDiscoveredAddress,
@@ -196,6 +197,7 @@ fun PoolScreen(viewModel: PoolViewModel = hiltViewModel()) {
             onUseClassicUiChange = { useClassicUi = it },
             onPoolCircuitChange = { viewModel.setPoolMode(if (it) "on" else "off") },
             onAuxToggle = { id, on -> viewModel.toggleAux(id, on) },
+            onMatterRecommission = { viewModel.matterRecommission() },
             onDismiss = { showSettings = false },
         )
     }

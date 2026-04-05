@@ -28,6 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -62,6 +66,7 @@ fun SettingsDrawer(
     isTestingAddress: Boolean,
     diagnostics: List<DiagnosticEvent>,
     useClassicUi: Boolean,
+    matter: com.ssilver.pentair.data.MatterStatus?,
     onManualAddressChange: (String) -> Unit,
     onApplyManualAddress: () -> Unit,
     onUseDiscoveredAddress: () -> Unit,
@@ -69,6 +74,7 @@ fun SettingsDrawer(
     onUseClassicUiChange: (Boolean) -> Unit,
     onPoolCircuitChange: (Boolean) -> Unit,
     onAuxToggle: (String, Boolean) -> Unit,
+    onMatterRecommission: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -166,6 +172,80 @@ fun SettingsDrawer(
                 fontSize = 12.sp,
                 color = TextFaint,
             )
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            SectionTitle("Google Home")
+
+            TechRow("Matter Pairing", matter?.statusDisplay ?: "Unknown")
+
+            var showConfirm by remember { mutableStateOf(false) }
+            var resetSent by remember { mutableStateOf(false) }
+
+            if (matter?.canReset == true) {
+                if (!showConfirm && !resetSent) {
+                    Button(
+                        onClick = { showConfirm = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = Color(0x26F87171),
+                            contentColor = Color(0xFFF87171),
+                        ),
+                    ) {
+                        Text("Reset Matter Pairing")
+                    }
+                } else if (showConfirm) {
+                    Text(
+                        text = "This will remove all Google Home devices. You'll need to re-scan the QR code.",
+                        fontSize = 13.sp,
+                        color = Color(0xFFF87171),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                showConfirm = false
+                                resetSent = true
+                                onMatterRecommission()
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = Color(0x40F87171),
+                                contentColor = Color(0xFFF87171),
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Yes, Reset") }
+                        Button(
+                            onClick = { showConfirm = false },
+                            modifier = Modifier.weight(1f),
+                        ) { Text("Cancel") }
+                    }
+                } else if (resetSent) {
+                    Text(
+                        text = "Reset sent. In Google Home: + > New device > Matter-enabled device. Manual code: 3497-0112-332",
+                        fontSize = 13.sp,
+                        color = Accent,
+                    )
+                }
+            } else if (matter != null && !matter.canReset) {
+                if (matter.pairingCode != null) {
+                    Text(
+                        text = "Ready to pair. In Google Home: + > New device > Matter-enabled device",
+                        fontSize = 13.sp,
+                        color = TextDim,
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                    Text(
+                        text = "Manual code: ${matter.pairingCode}",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Accent,
+                    )
+                } else {
+                    Text(
+                        text = "Not paired yet.",
+                        fontSize = 13.sp,
+                        color = TextDim,
+                    )
+                }
+            }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             SectionTitle("Auxiliaries")

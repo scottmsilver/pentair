@@ -58,6 +58,7 @@ pub enum AdapterCommand {
 #[derive(Debug, Clone)]
 pub enum PushEvent {
     StatusChanged,
+    MatterRecommission,
 }
 
 pub async fn run_adapter(

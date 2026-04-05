@@ -86,4 +86,6 @@ class PoolViewModel @Inject constructor(
     fun goodnight() = viewModelScope.launch { repository.goodnight() }
 
     fun toggleAux(id: String, on: Boolean) = viewModelScope.launch { repository.toggleAux(id, on) }
+
+    fun matterRecommission() = viewModelScope.launch { repository.matterRecommission() }
 }

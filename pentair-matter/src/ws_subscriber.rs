@@ -26,6 +26,14 @@ pub async fn run_ws_subscriber(
                 while let Some(msg) = read.next().await {
                     match msg {
                         Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                            // Check for daemon commands (JSON with "command" field)
+                            if let Ok(cmd) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if cmd.get("command").and_then(|v| v.as_str()) == Some("matter_recommission") {
+                                    tracing::info!("Recommission requested by daemon");
+                                    shared.recommission_requested.store(true, std::sync::atomic::Ordering::Release);
+                                    return; // Exit the subscriber so the process can restart
+                                }
+                            }
                             match serde_json::from_str::<PoolSystem>(&text) {
                                 Ok(pool) => {
                                     let new_state =

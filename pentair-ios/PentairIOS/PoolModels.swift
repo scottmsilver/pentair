@@ -6,7 +6,38 @@ struct PoolSystem: Decodable {
     let lights: LightState?
     let auxiliaries: [AuxiliaryState]
     let pump: PumpInfo?
-    let system: SystemInfo
+    let system: SystemInfo?
+    let matter: MatterStatus?
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pool = try? c.decode(BodyState.self, forKey: .pool)
+        spa = try? c.decode(SpaState.self, forKey: .spa)
+        lights = try? c.decode(LightState.self, forKey: .lights)
+        auxiliaries = (try? c.decode([AuxiliaryState].self, forKey: .auxiliaries)) ?? []
+        pump = try? c.decode(PumpInfo.self, forKey: .pump)
+        system = try? c.decode(SystemInfo.self, forKey: .system)
+        matter = try? c.decode(MatterStatus.self, forKey: .matter)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pool, spa, lights, auxiliaries, pump, system, matter
+    }
+
+    init(pool: BodyState?, spa: SpaState?, lights: LightState?,
+         auxiliaries: [AuxiliaryState], pump: PumpInfo?, system: SystemInfo?,
+         matter: MatterStatus? = nil) {
+        self.pool = pool; self.spa = spa; self.lights = lights
+        self.auxiliaries = auxiliaries; self.pump = pump; self.system = system
+        self.matter = matter
+    }
+}
+
+struct MatterStatus: Decodable {
+    let commissioned: Bool
+    let statusDisplay: String
+    let canReset: Bool
+    let pairingCode: String?
 }
 
 struct BodyState: Decodable {
@@ -371,14 +402,16 @@ extension PoolSystem {
         pump: PumpInfo? = nil,
         system: SystemInfo? = nil
     ) -> PoolSystem {
-        PoolSystem(
+        let result = PoolSystem(
             pool: pool ?? self.pool,
             spa: spa ?? self.spa,
             lights: lights ?? self.lights,
             auxiliaries: auxiliaries ?? self.auxiliaries,
             pump: pump ?? self.pump,
-            system: system ?? self.system
+            system: system ?? self.system,
+            matter: self.matter
         )
+        return result
     }
 }
 
@@ -850,7 +883,7 @@ extension PoolSystem {
                         on: $0.on
                     )
                 },
-                sharedPump: system.poolSpaSharedPump
+                sharedPump: system?.poolSpaSharedPump ?? true
             )
         case .spa:
             guard let spa else { return nil }
@@ -868,7 +901,7 @@ extension PoolSystem {
                         on: $0.on
                     )
                 },
-                sharedPump: system.poolSpaSharedPump
+                sharedPump: system?.poolSpaSharedPump ?? true
             )
         }
     }

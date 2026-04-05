@@ -107,11 +107,16 @@ struct ContentView: View {
                 daemonSection
                 diagnosticsSection
 
-                if let system = viewModel.system {
-                    systemSection(system.system)
-                    advancedSection(pool: system.pool)
-                    auxiliariesSection(auxiliaries: system.auxiliaries)
-                    pumpSection(system: system.system, pump: system.pump)
+                if let poolSystem = viewModel.system {
+                    if let sys = poolSystem.system {
+                        systemSection(sys)
+                    }
+                    advancedSection(pool: poolSystem.pool)
+                    matterSection
+                    auxiliariesSection(auxiliaries: poolSystem.auxiliaries)
+                    if let sys = poolSystem.system {
+                        pumpSection(system: sys, pump: poolSystem.pump)
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -214,6 +219,50 @@ struct ContentView: View {
             Text("Advanced")
         } footer: {
             Text("Most people should leave the pool circuit alone. Normal control is setpoint, spa mode, and lights.")
+        }
+    }
+
+    @State private var matterResetSent = false
+
+    private var matterSection: some View {
+        let matter = viewModel.system?.matter
+        return Section {
+            HStack {
+                Text("Matter Pairing")
+                Spacer()
+                Text(matter?.statusDisplay ?? "Unknown")
+                    .foregroundStyle(matter?.commissioned == true ? .green : .secondary)
+            }
+
+            if matter?.canReset == true && !matterResetSent {
+                Button(role: .destructive) {
+                    Task {
+                        await viewModel.matterRecommission()
+                        matterResetSent = true
+                    }
+                } label: {
+                    Text("Reset Matter Pairing")
+                }
+            } else if matterResetSent {
+                Text("Reset sent. Open the web dashboard at /matter to scan the QR code.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if matter != nil && matter?.canReset == false {
+                if let code = matter?.pairingCode {
+                    Text("Ready to pair. In Google Home: + > New device > Matter-enabled device")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Manual code: \(code)")
+                        .font(.title3.monospaced().bold())
+                        .foregroundStyle(.blue)
+                } else {
+                    Text("Not paired yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Google Home")
         }
     }
 
@@ -405,7 +454,7 @@ struct ContentView: View {
     }
 
     private var temperatureUnitSymbol: String {
-        viewModel.system?.system.tempUnit == "c" ? "C" : "F"
+        viewModel.system?.system?.tempUnit == "c" ? "C" : "F"
     }
 
     private var poolSetpointRange: ClosedRange<Int> {

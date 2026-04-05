@@ -59,4 +59,7 @@ interface PoolApiClient {
 
     @POST("/api/devices/register")
     suspend fun registerDevice(@Body body: Map<String, String>): ApiResponse
+
+    @POST("/api/matter/recommission")
+    suspend fun matterRecommission(): ApiResponse
 }

@@ -16,7 +16,7 @@
 use core::cell::Cell;
 use core::pin::pin;
 use std::net::UdpSocket;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use embassy_futures::select::{select, select4};
@@ -126,6 +126,10 @@ pub struct SharedState {
     /// Generation counter incremented on each state update.
     /// Consumers track their last-seen generation to detect changes.
     pub generation: AtomicU64,
+    /// Set by the WS subscriber when the daemon sends a recommission command.
+    /// The Matter thread checks this and exits so the process can restart in
+    /// commissioning mode.
+    pub recommission_requested: AtomicBool,
 }
 
 impl SharedState {
@@ -133,6 +137,7 @@ impl SharedState {
         Self {
             state: Mutex::new(MatterState::default()),
             generation: AtomicU64::new(0),
+            recommission_requested: AtomicBool::new(false),
         }
     }
 

@@ -47,6 +47,14 @@ h2 { font-size: 20px; font-weight: 700; color: #f8fafc; margin-bottom: 4px; }
 .divider { border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 20px 0; }
 a { color: #38bdf8; text-decoration: none; }
 a:hover { text-decoration: underline; }
+.recommission-btn {
+  display: inline-block; margin-top: 16px; padding: 10px 20px;
+  background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3);
+  border-radius: 10px; color: #f87171; font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: background 0.2s;
+}
+.recommission-btn:hover { background: rgba(248,113,113,0.25); }
+.recommission-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>
 </head><body>
 <div class="card">
@@ -72,6 +80,13 @@ a:hover { text-decoration: underline; }
   </ol>
 
   <hr class="divider">
+
+  <button class="recommission-btn" id="recommissionBtn" onclick="recommission()">
+    Reset Matter Pairing
+  </button>
+  <div class="sub" style="margin-top:8px">Deletes the current pairing so you can re-add to Google Home</div>
+
+  <hr class="divider">
   <a href="/">← Back to pool controls</a>
 </div>
 
@@ -84,5 +99,23 @@ fetch('/api/matter/info')
   .catch(() => {
     document.getElementById('manualCode').textContent = '—';
   });
+
+function recommission() {
+  if (!confirm('Reset Matter pairing? You will need to re-add pool devices in Google Home.')) return;
+  const btn = document.getElementById('recommissionBtn');
+  btn.disabled = true;
+  btn.textContent = 'Resetting...';
+  fetch('/api/matter/recommission', { method: 'POST' })
+    .then(r => {
+      if (r.ok) {
+        btn.textContent = 'Reset sent — bridge restarting';
+        setTimeout(() => { btn.textContent = 'Reset Matter Pairing'; btn.disabled = false; }, 10000);
+      } else {
+        btn.textContent = 'Error — try again';
+        btn.disabled = false;
+      }
+    })
+    .catch(() => { btn.textContent = 'Error — try again'; btn.disabled = false; });
+}
 </script>
 </body></html>

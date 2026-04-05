@@ -504,6 +504,15 @@ class PoolRepository @Inject constructor(
         refresh()
     }
 
+    suspend fun matterRecommission() {
+        try {
+            api?.matterRecommission()
+            recordDiagnostic("matter", "Recommission requested")
+        } catch (e: Exception) {
+            recordDiagnostic("matter", "Recommission failed: ${e.message}")
+        }
+    }
+
     private fun recordDiagnostic(category: String, message: String) {
         android.util.Log.d("PoolRepo", "[$category] $message")
         _diagnostics.value = (_diagnostics.value + DiagnosticEvent(category = category, message = message))

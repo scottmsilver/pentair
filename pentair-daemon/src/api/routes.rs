@@ -95,6 +95,7 @@ pub fn router(
         .route("/api/devices/register", post(register_device))
         .route("/api/matter/qr", get(matter_qr))
         .route("/api/matter/info", get(matter_info))
+        .route("/api/matter/recommission", post(matter_recommission))
         .route("/api/cancel-delay", post(cancel_delay))
         .route("/api/refresh", post(refresh))
         .route("/api/ws", get(super::websocket::ws_handler))
@@ -127,7 +128,23 @@ async fn serve_ui(State(state): State<AppState>) -> impl IntoResponse {
 async fn get_pool(State(state): State<AppState>) -> Json<serde_json::Value> {
     let s = state.shared.read().await;
     match s.pool_system() {
-        Some(pool) => Json(serde_json::to_value(&pool).unwrap()),
+        Some(pool) => {
+            let mut json = serde_json::to_value(&pool).unwrap();
+            // Inject Matter status as a daemon-owned display contract
+            let fabric_path = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".pentair")
+                .join("matter-fabrics.bin");
+            let commissioned = fabric_path.exists();
+            json["matter"] = serde_json::json!({
+                "commissioned": commissioned,
+                "status_display": if commissioned { "Paired" } else { "Not paired" },
+                "can_reset": commissioned,
+                "pairing_code": if commissioned { None } else { Some(matter_manual_code()) },
+                "pairing_qr_url": if commissioned { None } else { Some("/api/matter/qr") },
+            });
+            Json(json)
+        }
         None => Json(serde_json::json!({"error": "pool data not yet available"})),
     }
 }
@@ -695,7 +712,7 @@ fn matter_setup_code() -> String {
     std::env::var("MATTER_SETUP_CODE").unwrap_or_else(|_| DEFAULT_MATTER_SETUP_CODE.to_string())
 }
 
-fn matter_manual_code() -> String {
+pub fn matter_manual_code() -> String {
     std::env::var("MATTER_MANUAL_CODE").unwrap_or_else(|_| DEFAULT_MATTER_MANUAL_CODE.to_string())
 }
 
@@ -727,7 +744,18 @@ async fn matter_qr() -> impl IntoResponse {
     )
 }
 
+async fn matter_recommission(State(state): State<AppState>) -> impl IntoResponse {
+    let _ = state.push_tx.send(crate::adapter::PushEvent::MatterRecommission);
+    tracing::info!("Matter recommission requested via API");
+    (StatusCode::OK, "Matter bridge will enter commissioning mode")
+}
+
 async fn matter_info() -> Json<serde_json::Value> {
+    let fabric_path = dirs::home_dir()
+        .unwrap_or_default()
+        .join(".pentair")
+        .join("matter-fabrics.bin");
+    let commissioned = fabric_path.exists();
     Json(serde_json::json!({
         "setup_code": matter_setup_code(),
         "manual_code": matter_manual_code(),
@@ -735,6 +763,7 @@ async fn matter_info() -> Json<serde_json::Value> {
         "passcode": 20202021,
         "vendor_id": "0xFFF1",
         "product_id": "0x8001",
+        "commissioned": commissioned,
     }))
 }
 

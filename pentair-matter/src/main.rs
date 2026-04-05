@@ -83,12 +83,25 @@ async fn main() {
     // Spawn the Matter bridge on a dedicated thread
     let (bridge_handle, cmd_rx) = matter_bridge::spawn_bridge(&config, shared.clone(), mode_map.clone());
 
-    // Spawn the WebSocket subscriber to keep state in sync
+    // Spawn the WebSocket subscriber to keep state in sync.
+    // Returns if the daemon sends a recommission command.
     let ws_shared = shared.clone();
     let ws_mode_map = mode_map.clone();
     let ws_url = daemon.ws_url();
+    let recommission_shared = shared.clone();
+    let recommission_fabric_path = config.fabric_path.clone();
     tokio::spawn(async move {
         ws_subscriber::run_ws_subscriber(ws_url, ws_shared, ws_mode_map).await;
+        // If we get here and recommission was requested, delete fabric and exit.
+        // systemd Restart=on-failure will restart us in commissioning mode.
+        if recommission_shared.recommission_requested.load(std::sync::atomic::Ordering::Acquire) {
+            if recommission_fabric_path.exists() {
+                std::fs::remove_file(&recommission_fabric_path).ok();
+                tracing::info!(path = %recommission_fabric_path.display(), "Fabric deleted for recommission");
+            }
+            tracing::info!("Exiting for recommission — systemd will restart in commissioning mode");
+            std::process::exit(0);
+        }
     });
 
     // Spawn the command dispatcher on a blocking thread (uses std::sync::mpsc::recv)
