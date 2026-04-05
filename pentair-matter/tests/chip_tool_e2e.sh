@@ -194,18 +194,22 @@ assert_read        "Spa CtrlSeqOfOp"        "2"      "ControlSequenceOfOperation
 assert_read        "Spa MaxHeatLimit"       "4000"   "AbsMaxHeatSetpointLimit"   thermostat read abs-max-heat-setpoint-limit "$NODE_ID" 2
 assert_read_nonzero "Spa MinHeatLimit"                "AbsMinHeatSetpointLimit"   thermostat read abs-min-heat-setpoint-limit "$NODE_ID" 2
 
-# Jets
-OUTPUT=$(chip onoff read on-off "$NODE_ID" 3)
+# Pool (ep 3)
+assert_read_nonzero "Pool LocalTemperature"            "LocalTemperature"          thermostat read local-temperature "$NODE_ID" 3
+assert_read_nonzero "Pool HeatingSetpoint"             "OccupiedHeatingSetpoint"   thermostat read occupied-heating-setpoint "$NODE_ID" 3
+
+# Jets (ep 4)
+OUTPUT=$(chip onoff read on-off "$NODE_ID" 4)
 JETS=$(echo "$OUTPUT" | grep "OnOff:" | tail -1 | sed 's/.*OnOff: *//')
 echo "  PASS  Jets OnOff ($JETS)"; ((PASS++))
 
-# Lights
-OUTPUT=$(chip onoff read on-off "$NODE_ID" 4)
+# Lights (ep 5)
+OUTPUT=$(chip onoff read on-off "$NODE_ID" 5)
 LIGHTS=$(echo "$OUTPUT" | grep "OnOff:" | tail -1 | sed 's/.*OnOff: *//')
 echo "  PASS  Lights OnOff ($LIGHTS)"; ((PASS++))
 
 # ModeSelect: count supported modes
-OUTPUT=$(chip modeselect read supported-modes "$NODE_ID" 4)
+OUTPUT=$(chip modeselect read supported-modes "$NODE_ID" 5)
 MODE_COUNT=$(echo "$OUTPUT" | grep -c "Label:" || echo 0)
 if [[ "$MODE_COUNT" -eq 12 ]]; then
     echo "  PASS  Lights SupportedModes ($MODE_COUNT modes)"; ((PASS++))
@@ -213,7 +217,7 @@ else
     echo "  FAIL  Lights SupportedModes (expected 12, got $MODE_COUNT)"; ((FAIL++))
 fi
 
-assert_read_nonzero "Lights CurrentMode" "CurrentMode" modeselect read current-mode "$NODE_ID" 4
+assert_read_nonzero "Lights CurrentMode" "CurrentMode" modeselect read current-mode "$NODE_ID" 5
 
 # --- Write + command tests ---
 
@@ -234,29 +238,29 @@ RESTORE=$(python3 -c "print(round(($INITIAL_SP-32)*5/9*100))")
 chip thermostat write occupied-heating-setpoint "$RESTORE" "$NODE_ID" 2 >/dev/null
 sleep 1
 
-# ModeSelect: change to party (1)
-assert_cmd "ChangeToMode party" modeselect change-to-mode 1 "$NODE_ID" 4
+# ModeSelect: change to party (1) on ep 5
+assert_cmd "ChangeToMode party" modeselect change-to-mode 1 "$NODE_ID" 5
 sleep 2
-assert_read "Readback mode=party" "1" "CurrentMode" modeselect read current-mode "$NODE_ID" 4
+assert_read "Readback mode=party" "1" "CurrentMode" modeselect read current-mode "$NODE_ID" 5
 assert_daemon "Daemon mode=party" "lights.mode" "party"
 
-# ModeSelect: change to caribbean (3)
-assert_cmd "ChangeToMode caribbean" modeselect change-to-mode 3 "$NODE_ID" 4
+# ModeSelect: change to caribbean (3) on ep 5
+assert_cmd "ChangeToMode caribbean" modeselect change-to-mode 3 "$NODE_ID" 5
 sleep 1
 assert_daemon "Daemon mode=caribbean" "lights.mode" "caribbean"
 
-# OnOff: spa on
+# OnOff: spa on (ep 2)
 assert_cmd "Spa On" onoff on "$NODE_ID" 2
 sleep 1
 assert_daemon "Daemon spa on" "spa.on" "True"
 
-# OnOff: jets on
-assert_cmd "Jets On" onoff on "$NODE_ID" 3
+# OnOff: jets on (ep 4)
+assert_cmd "Jets On" onoff on "$NODE_ID" 4
 sleep 1
 assert_daemon "Daemon jets" "spa.accessories.jets" "True"
 
-# OnOff: lights on
-assert_cmd "Lights On" onoff on "$NODE_ID" 4
+# OnOff: lights on (ep 5)
+assert_cmd "Lights On" onoff on "$NODE_ID" 5
 sleep 1
 assert_daemon "Daemon lights on" "lights.on" "True"
 

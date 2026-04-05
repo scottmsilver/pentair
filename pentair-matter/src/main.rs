@@ -1,7 +1,11 @@
 #![recursion_limit = "256"]
 
 mod clusters;
+mod color_control_handler;
 mod config;
+mod groups_handler;
+mod identify_handler;
+mod level_control_handler;
 mod convert;
 mod daemon_client;
 mod light_modes;
@@ -10,6 +14,7 @@ mod mode_select_handler;
 mod pool_types;
 mod state;
 mod thermostat_handler;
+mod thermostat_ui_handler;
 mod ws_subscriber;
 
 use std::sync::Arc;
@@ -118,6 +123,8 @@ async fn dispatch_commands(cmd_rx: std::sync::mpsc::Receiver<Command>, daemon: D
                 let result = match cmd {
                     Command::SpaOn => daemon.post("/api/spa/on", None).await,
                     Command::SpaOff => daemon.post("/api/spa/off", None).await,
+                    Command::PoolOn => daemon.post("/api/pool/on", None).await,
+                    Command::PoolOff => daemon.post("/api/pool/off", None).await,
                     Command::JetsOn => daemon.post("/api/spa/jets/on", None).await,
                     Command::JetsOff => daemon.post("/api/spa/jets/off", None).await,
                     Command::LightsOn => daemon.post("/api/lights/on", None).await,
@@ -127,6 +134,14 @@ async fn dispatch_commands(cmd_rx: std::sync::mpsc::Receiver<Command>, daemon: D
                         daemon
                             .post(
                                 "/api/spa/heat",
+                                Some(serde_json::json!({"setpoint": f})),
+                            )
+                            .await
+                    }
+                    Command::SetPoolSetpoint(f) => {
+                        daemon
+                            .post(
+                                "/api/pool/heat",
                                 Some(serde_json::json!({"setpoint": f})),
                             )
                             .await

@@ -31,7 +31,7 @@ use rs_matter::dm::clusters::on_off::{
     self, EffectVariantEnum, OnOffHooks, OutOfBandMessage, StartUpOnOffEnum,
 };
 use rs_matter::dm::devices::test::{DAC_PRIVKEY, TEST_DEV_ATT};
-use rs_matter::dm::devices::{DEV_TYPE_AGGREGATOR, DEV_TYPE_BRIDGED_NODE, DEV_TYPE_ON_OFF_LIGHT};
+use rs_matter::dm::devices::{DEV_TYPE_AGGREGATOR, DEV_TYPE_BRIDGED_NODE};
 use rs_matter::dm::DeviceType;
 
 /// Matter Thermostat device type (Matter App Cluster Spec §9.5, ID 0x0301).
@@ -39,6 +39,18 @@ use rs_matter::dm::DeviceType;
 const DEV_TYPE_THERMOSTAT: DeviceType = DeviceType {
     dtype: 0x0301,
     drev: 2,
+};
+
+/// Extended Color Light device type (0x010D) — supports hue/saturation color control.
+const DEV_TYPE_EXTENDED_COLOR_LIGHT: DeviceType = DeviceType {
+    dtype: 0x010D,
+    drev: 4,
+};
+
+/// On/Off Plug-in Unit (0x010A) — simple switch, no light semantics.
+const DEV_TYPE_ON_OFF_PLUG: DeviceType = DeviceType {
+    dtype: 0x010A,
+    drev: 3,
 };
 use rs_matter::dm::endpoints;
 use rs_matter::dm::events::DefaultEvents;
@@ -68,12 +80,22 @@ pub use rs_matter::dm::clusters::decl::bridged_device_basic_information::{
     self, ClusterHandler as _, KeepActiveRequest,
 };
 
+use crate::clusters::color_control::color_control as color_control_decl;
+use crate::clusters::groups::groups as groups_decl;
+use crate::clusters::identify::identify as identify_decl;
+use crate::clusters::level_control::level_control as level_control_decl;
 use crate::clusters::mode_select::mode_select as mode_select_decl;
 use crate::clusters::thermostat::thermostat as thermostat_decl;
+use crate::clusters::thermostat_ui::thermostat_user_interface_configuration as tuic_decl;
+use crate::color_control_handler::ColorControlHandler;
 use crate::config::Config;
+use crate::groups_handler::GroupsHandler;
+use crate::identify_handler::IdentifyHandler;
+use crate::level_control_handler::FixedLevelHandler;
 use crate::mode_select_handler::LightModeSelectHandler;
+use crate::thermostat_ui_handler::ThermostatUiHandler;
 use crate::state::MatterState;
-use crate::thermostat_handler::SpaThermostatHandler;
+use crate::thermostat_handler::{PoolThermostatHandler, SpaThermostatHandler};
 
 // ---------------------------------------------------------------------------
 // Commands sent from Matter thread to tokio thread
@@ -83,12 +105,15 @@ use crate::thermostat_handler::SpaThermostatHandler;
 pub enum Command {
     SpaOn,
     SpaOff,
+    PoolOn,
+    PoolOff,
     JetsOn,
     JetsOff,
     LightsOn,
     LightsOff,
     Goodnight,
-    SetSpaSetpoint(i32), // Fahrenheit
+    SetSpaSetpoint(i32),  // Fahrenheit
+    SetPoolSetpoint(i32), // Fahrenheit
     SetLightMode(String),
 }
 
@@ -190,9 +215,9 @@ const DEV_DET: BasicInfoConfig<'static> = BasicInfoConfig {
     sw_ver: 1,
     sw_ver_str: "0.1.0",
     serial_no: "PENTAIR-001",
-    product_name: "Pentair Pool Bridge",
-    vendor_name: "Pentair-Matter",
-    device_name: "PentairPool",
+    product_name: "Pentair Pool",
+    vendor_name: "Pentair",
+    device_name: "Pentair Pool",
     ..BasicInfoConfig::new()
 };
 
@@ -226,7 +251,78 @@ const LIGHTS_MODE_SELECT_CLUSTER: Cluster<'static> = mode_select_decl::FULL_CLUS
     .with_attrs(with!(required))
     .with_cmds(with!(mode_select_decl::CommandId::ChangeToMode));
 
-/// Endpoint 0 = root, 1 = aggregator, 2 = spa, 3 = jets, 4 = lights, 5 = goodnight
+// ThermostatUserInterfaceConfiguration — tells Google Home to display Fahrenheit.
+const TUIC_CLUSTER: Cluster<'static> = tuic_decl::FULL_CLUSTER
+    .with_revision(2)
+    .with_features(0)
+    .with_attrs(with!(required))
+    .with_cmds(with!());
+
+// Identify cluster (required by Extended Color Light).
+const LIGHTS_IDENTIFY_CLUSTER: Cluster<'static> = identify_decl::FULL_CLUSTER
+    .with_revision(4)
+    .with_features(0)
+    .with_attrs(with!(required))
+    .with_cmds(with!(identify_decl::CommandId::Identify));
+
+// Groups cluster (required by Extended Color Light).
+const LIGHTS_GROUPS_CLUSTER: Cluster<'static> = groups_decl::FULL_CLUSTER
+    .with_revision(4)
+    .with_features(0)
+    .with_attrs(with!(required))
+    .with_cmds(with!(
+        groups_decl::CommandId::AddGroup
+            | groups_decl::CommandId::ViewGroup
+            | groups_decl::CommandId::GetGroupMembership
+            | groups_decl::CommandId::RemoveGroup
+            | groups_decl::CommandId::RemoveAllGroups
+            | groups_decl::CommandId::AddGroupIfIdentifying
+    ));
+
+// LevelControl cluster for pool lights (fixed brightness — pool lights don't dim).
+// Features: OnOff (0x01) + Lighting (0x02) = 0x03, required by Extended Color Light.
+const LIGHTS_LEVEL_CLUSTER: Cluster<'static> = level_control_decl::FULL_CLUSTER
+    .with_revision(5)
+    .with_features(0x03)
+    .with_attrs(with!(required; level_control_decl::AttributeId::StartUpCurrentLevel))
+    .with_cmds(with!(
+        level_control_decl::CommandId::MoveToLevel
+            | level_control_decl::CommandId::Move
+            | level_control_decl::CommandId::Step
+            | level_control_decl::CommandId::Stop
+            | level_control_decl::CommandId::MoveToLevelWithOnOff
+            | level_control_decl::CommandId::MoveWithOnOff
+            | level_control_decl::CommandId::StepWithOnOff
+            | level_control_decl::CommandId::StopWithOnOff
+    ));
+
+// ColorControl cluster for pool lights (HS + XY + CT features for Extended Color Light compliance).
+const LIGHTS_COLOR_CLUSTER: Cluster<'static> = color_control_decl::FULL_CLUSTER
+    .with_revision(7)
+    .with_features(0x19) // HS (0x01) + XY (0x08) + CT (0x10)
+    .with_attrs(with!(
+        required;
+        color_control_decl::AttributeId::CurrentHue
+            | color_control_decl::AttributeId::CurrentSaturation
+            | color_control_decl::AttributeId::CurrentX
+            | color_control_decl::AttributeId::CurrentY
+            | color_control_decl::AttributeId::ColorTemperatureMireds
+            | color_control_decl::AttributeId::ColorCapabilities
+            | color_control_decl::AttributeId::EnhancedColorMode
+            | color_control_decl::AttributeId::RemainingTime
+            | color_control_decl::AttributeId::ColorTempPhysicalMinMireds
+            | color_control_decl::AttributeId::ColorTempPhysicalMaxMireds
+    ))
+    .with_cmds(with!(
+        color_control_decl::CommandId::MoveToHue
+            | color_control_decl::CommandId::MoveToSaturation
+            | color_control_decl::CommandId::MoveToHueAndSaturation
+            | color_control_decl::CommandId::MoveToColor
+            | color_control_decl::CommandId::MoveToColorTemperature
+            | color_control_decl::CommandId::StopMoveStep
+    ));
+
+/// Endpoint 0 = root, 1 = aggregator, 2 = spa, 3 = pool, 4 = jets, 5 = lights, 6 = goodnight
 const NODE: Node<'static> = Node {
     id: 0,
     endpoints: &[
@@ -237,7 +333,7 @@ const NODE: Node<'static> = Node {
             device_types: devices!(DEV_TYPE_AGGREGATOR),
             clusters: clusters!(desc::DescHandler::CLUSTER),
         },
-        // Spa (Thermostat + OnOff + Bridged)
+        // Spa (Thermostat + TUIC + OnOff + Bridged)
         Endpoint {
             id: 2,
             device_types: devices!(DEV_TYPE_THERMOSTAT, DEV_TYPE_BRIDGED_NODE),
@@ -245,34 +341,51 @@ const NODE: Node<'static> = Node {
                 desc::DescHandler::CLUSTER,
                 BridgedHandler::CLUSTER,
                 PentairOnOffHooks::CLUSTER,
-                SPA_THERMOSTAT_CLUSTER
+                SPA_THERMOSTAT_CLUSTER,
+                TUIC_CLUSTER
             ),
         },
-        // Jets (OnOff + Bridged)
+        // Pool (Thermostat + TUIC + OnOff + Bridged)
         Endpoint {
             id: 3,
-            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT, DEV_TYPE_BRIDGED_NODE),
+            device_types: devices!(DEV_TYPE_THERMOSTAT, DEV_TYPE_BRIDGED_NODE),
+            clusters: clusters!(
+                desc::DescHandler::CLUSTER,
+                BridgedHandler::CLUSTER,
+                PentairOnOffHooks::CLUSTER,
+                SPA_THERMOSTAT_CLUSTER,
+                TUIC_CLUSTER
+            ),
+        },
+        // Jets (OnOff Plug + Bridged)
+        Endpoint {
+            id: 4,
+            device_types: devices!(DEV_TYPE_ON_OFF_PLUG, DEV_TYPE_BRIDGED_NODE),
             clusters: clusters!(
                 desc::DescHandler::CLUSTER,
                 BridgedHandler::CLUSTER,
                 PentairOnOffHooks::CLUSTER
             ),
         },
-        // Lights (OnOff + ModeSelect + Bridged)
+        // Lights (Extended Color Light: Identify + Groups + OnOff + Level + Color + ModeSelect + Bridged)
         Endpoint {
-            id: 4,
-            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT, DEV_TYPE_BRIDGED_NODE),
+            id: 5,
+            device_types: devices!(DEV_TYPE_EXTENDED_COLOR_LIGHT, DEV_TYPE_BRIDGED_NODE),
             clusters: clusters!(
                 desc::DescHandler::CLUSTER,
                 BridgedHandler::CLUSTER,
+                LIGHTS_IDENTIFY_CLUSTER,
+                LIGHTS_GROUPS_CLUSTER,
                 PentairOnOffHooks::CLUSTER,
+                LIGHTS_LEVEL_CLUSTER,
+                LIGHTS_COLOR_CLUSTER,
                 LIGHTS_MODE_SELECT_CLUSTER
             ),
         },
-        // Goodnight (OnOff + Bridged)
+        // Goodnight (OnOff Plug + Bridged)
         Endpoint {
-            id: 5,
-            device_types: devices!(DEV_TYPE_ON_OFF_LIGHT, DEV_TYPE_BRIDGED_NODE),
+            id: 6,
+            device_types: devices!(DEV_TYPE_ON_OFF_PLUG, DEV_TYPE_BRIDGED_NODE),
             clusters: clusters!(
                 desc::DescHandler::CLUSTER,
                 BridgedHandler::CLUSTER,
@@ -290,6 +403,7 @@ const NODE: Node<'static> = Node {
 #[derive(Clone, Copy, Debug)]
 enum DeviceRole {
     Spa,
+    Pool,
     Jets,
     Lights,
     Goodnight,
@@ -310,6 +424,7 @@ impl PentairOnOffHooks {
             let s = shared.state.lock().unwrap();
             let on = match role {
                 DeviceRole::Spa => s.spa_on,
+                DeviceRole::Pool => s.pool_on,
                 DeviceRole::Jets => s.jets_on,
                 DeviceRole::Lights => s.lights_on,
                 DeviceRole::Goodnight => false, // momentary action, always off
@@ -350,6 +465,8 @@ impl OnOffHooks for PentairOnOffHooks {
         let cmd = match (self.role, on) {
             (DeviceRole::Spa, true) => Command::SpaOn,
             (DeviceRole::Spa, false) => Command::SpaOff,
+            (DeviceRole::Pool, true) => Command::PoolOn,
+            (DeviceRole::Pool, false) => Command::PoolOff,
             (DeviceRole::Jets, true) => Command::JetsOn,
             (DeviceRole::Jets, false) => Command::JetsOff,
             (DeviceRole::Lights, true) => Command::LightsOn,
@@ -385,6 +502,7 @@ impl OnOffHooks for PentairOnOffHooks {
                     let s = self.shared.state.lock().unwrap();
                     match self.role {
                         DeviceRole::Spa => s.spa_on,
+                        DeviceRole::Pool => s.pool_on,
                         DeviceRole::Jets => s.jets_on,
                         DeviceRole::Lights => s.lights_on,
                         DeviceRole::Goodnight => false, // momentary action, always off
@@ -407,13 +525,17 @@ impl OnOffHooks for PentairOnOffHooks {
 struct BridgedHandler {
     dataver: Dataver,
     reachable: bool,
+    name: &'static str,
+    unique_id: &'static str,
 }
 
 impl BridgedHandler {
-    const fn new(dataver: Dataver) -> Self {
+    const fn new(dataver: Dataver, name: &'static str, unique_id: &'static str) -> Self {
         Self {
             dataver,
             reachable: true,
+            name,
+            unique_id,
         }
     }
 
@@ -425,7 +547,7 @@ impl BridgedHandler {
 impl bridged_device_basic_information::ClusterHandler for BridgedHandler {
     const CLUSTER: Cluster<'static> = bridged_device_basic_information::FULL_CLUSTER
         .with_features(0)
-        .with_attrs(with!(required))
+        .with_attrs(with!(required; bridged_device_basic_information::AttributeId::NodeLabel | bridged_device_basic_information::AttributeId::ProductName))
         .with_cmds(with!());
 
     fn dataver(&self) -> u32 {
@@ -443,9 +565,34 @@ impl bridged_device_basic_information::ClusterHandler for BridgedHandler {
     fn unique_id<P: TLVBuilderParent>(
         &self,
         _ctx: impl ReadContext,
-        _builder: Utf8StrBuilder<P>,
+        builder: Utf8StrBuilder<P>,
     ) -> Result<P, Error> {
-        Err(Error::new(rs_matter::error::ErrorCode::InvalidAction))
+        builder.set(self.unique_id)
+    }
+
+    fn product_name<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: Utf8StrBuilder<P>,
+    ) -> Result<P, Error> {
+        builder.set(self.name)
+    }
+
+    fn node_label<P: TLVBuilderParent>(
+        &self,
+        _ctx: impl ReadContext,
+        builder: Utf8StrBuilder<P>,
+    ) -> Result<P, Error> {
+        builder.set(self.name)
+    }
+
+    fn set_node_label(
+        &self,
+        _ctx: impl rs_matter::dm::WriteContext,
+        _label: &str,
+    ) -> Result<(), Error> {
+        // Read-only — names are fixed by the bridge
+        Ok(())
     }
 
     fn handle_keep_active(
@@ -465,9 +612,17 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
     mut rand: impl rand::RngCore + Copy,
     spa_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
     spa_thermostat: &'a thermostat_decl::HandlerAdaptor<SpaThermostatHandler>,
+    spa_tuic: &'a tuic_decl::HandlerAdaptor<ThermostatUiHandler>,
+    pool_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
+    pool_thermostat: &'a thermostat_decl::HandlerAdaptor<PoolThermostatHandler>,
+    pool_tuic: &'a tuic_decl::HandlerAdaptor<ThermostatUiHandler>,
     jets_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
     lights_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
+    lights_identify: &'a identify_decl::HandlerAdaptor<IdentifyHandler>,
+    lights_groups: &'a groups_decl::HandlerAdaptor<GroupsHandler>,
+    lights_level: &'a level_control_decl::HandlerAdaptor<FixedLevelHandler>,
     lights_mode_select: &'a mode_select_decl::HandlerAdaptor<LightModeSelectHandler>,
+    lights_color: &'a color_control_decl::HandlerAdaptor<ColorControlHandler>,
     goodnight_on_off: &'a on_off::OnOffHandler<'a, OH, LH>,
 ) -> impl AsyncMetadata + AsyncHandler + 'a {
     (
@@ -494,7 +649,7 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
                     )
                     .chain(
                         EpClMatcher::new(Some(2), Some(BridgedHandler::CLUSTER.id)),
-                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand), "Spa", "pentair-spa").adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(2), Some(PentairOnOffHooks::CLUSTER.id)),
@@ -504,47 +659,88 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
                         EpClMatcher::new(Some(2), Some(SPA_THERMOSTAT_CLUSTER.id)),
                         Async(spa_thermostat),
                     )
-                    // Jets (ep 3)
+                    .chain(
+                        EpClMatcher::new(Some(2), Some(TUIC_CLUSTER.id)),
+                        Async(spa_tuic),
+                    )
+                    // Pool (ep 3)
                     .chain(
                         EpClMatcher::new(Some(3), Some(desc::DescHandler::CLUSTER.id)),
                         Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(3), Some(BridgedHandler::CLUSTER.id)),
-                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand), "Pool", "pentair-pool").adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(3), Some(PentairOnOffHooks::CLUSTER.id)),
-                        on_off::HandlerAsyncAdaptor(jets_on_off),
+                        on_off::HandlerAsyncAdaptor(pool_on_off),
                     )
-                    // Lights (ep 4)
+                    .chain(
+                        EpClMatcher::new(Some(3), Some(SPA_THERMOSTAT_CLUSTER.id)),
+                        Async(pool_thermostat),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(3), Some(TUIC_CLUSTER.id)),
+                        Async(pool_tuic),
+                    )
+                    // Jets (ep 4)
                     .chain(
                         EpClMatcher::new(Some(4), Some(desc::DescHandler::CLUSTER.id)),
                         Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(4), Some(BridgedHandler::CLUSTER.id)),
-                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand), "Jets", "pentair-jets").adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(4), Some(PentairOnOffHooks::CLUSTER.id)),
-                        on_off::HandlerAsyncAdaptor(lights_on_off),
+                        on_off::HandlerAsyncAdaptor(jets_on_off),
                     )
-                    .chain(
-                        EpClMatcher::new(Some(4), Some(LIGHTS_MODE_SELECT_CLUSTER.id)),
-                        Async(lights_mode_select),
-                    )
-                    // Goodnight (ep 5)
+                    // Lights (ep 5)
                     .chain(
                         EpClMatcher::new(Some(5), Some(desc::DescHandler::CLUSTER.id)),
                         Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
                     )
                     .chain(
                         EpClMatcher::new(Some(5), Some(BridgedHandler::CLUSTER.id)),
-                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand), "Pool Light", "pentair-lights").adapt()),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(LIGHTS_IDENTIFY_CLUSTER.id)),
+                        Async(lights_identify),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(LIGHTS_GROUPS_CLUSTER.id)),
+                        Async(lights_groups),
                     )
                     .chain(
                         EpClMatcher::new(Some(5), Some(PentairOnOffHooks::CLUSTER.id)),
+                        on_off::HandlerAsyncAdaptor(lights_on_off),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(LIGHTS_LEVEL_CLUSTER.id)),
+                        Async(lights_level),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(LIGHTS_MODE_SELECT_CLUSTER.id)),
+                        Async(lights_mode_select),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(5), Some(LIGHTS_COLOR_CLUSTER.id)),
+                        Async(lights_color),
+                    )
+                    // Goodnight (ep 6)
+                    .chain(
+                        EpClMatcher::new(Some(6), Some(desc::DescHandler::CLUSTER.id)),
+                        Async(desc::DescHandler::new(Dataver::new_rand(&mut rand)).adapt()),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(6), Some(BridgedHandler::CLUSTER.id)),
+                        Async(BridgedHandler::new(Dataver::new_rand(&mut rand), "Goodnight", "pentair-goodnight").adapt()),
+                    )
+                    .chain(
+                        EpClMatcher::new(Some(6), Some(PentairOnOffHooks::CLUSTER.id)),
                         on_off::HandlerAsyncAdaptor(goodnight_on_off),
                     ),
             ),
@@ -583,24 +779,40 @@ fn run_matter(
         spa_hooks,
     );
 
-    let jets_hooks = PentairOnOffHooks::new(DeviceRole::Jets, shared.clone(), cmd_tx.clone());
-    let jets_on_off = on_off::OnOffHandler::new_standalone(
-        Dataver::new_rand(&mut rng),
-        3,
-        jets_hooks,
-    );
-
-    // Thermostat for spa
+    // Thermostat + TUIC for spa
     let spa_thermostat = SpaThermostatHandler::new(
         Dataver::new_rand(&mut rng),
         shared.clone(),
         cmd_tx.clone(),
     ).adapt();
+    let spa_tuic = ThermostatUiHandler::new(Dataver::new_rand(&mut rng)).adapt();
+
+    // Pool (ep 3)
+    let pool_hooks = PentairOnOffHooks::new(DeviceRole::Pool, shared.clone(), cmd_tx.clone());
+    let pool_on_off = on_off::OnOffHandler::new_standalone(
+        Dataver::new_rand(&mut rng),
+        3,
+        pool_hooks,
+    );
+
+    let pool_thermostat = PoolThermostatHandler::new(
+        Dataver::new_rand(&mut rng),
+        shared.clone(),
+        cmd_tx.clone(),
+    ).adapt();
+    let pool_tuic = ThermostatUiHandler::new(Dataver::new_rand(&mut rng)).adapt();
+
+    let jets_hooks = PentairOnOffHooks::new(DeviceRole::Jets, shared.clone(), cmd_tx.clone());
+    let jets_on_off = on_off::OnOffHandler::new_standalone(
+        Dataver::new_rand(&mut rng),
+        4,
+        jets_hooks,
+    );
 
     let lights_hooks = PentairOnOffHooks::new(DeviceRole::Lights, shared.clone(), cmd_tx.clone());
     let lights_on_off = on_off::OnOffHandler::new_standalone(
         Dataver::new_rand(&mut rng),
-        4,
+        5,
         lights_hooks,
     );
 
@@ -612,10 +824,20 @@ fn run_matter(
         cmd_tx.clone(),
     ).adapt();
 
+    // Identify + Groups + LevelControl + ColorControl for lights
+    let lights_identify = IdentifyHandler::new(Dataver::new_rand(&mut rng)).adapt();
+    let lights_groups = GroupsHandler::new(Dataver::new_rand(&mut rng)).adapt();
+    let lights_level = FixedLevelHandler::new(Dataver::new_rand(&mut rng), cmd_tx.clone()).adapt();
+    let lights_color = ColorControlHandler::new(
+        Dataver::new_rand(&mut rng),
+        shared.clone(),
+        cmd_tx.clone(),
+    ).adapt();
+
     let goodnight_hooks = PentairOnOffHooks::new(DeviceRole::Goodnight, shared, cmd_tx);
     let goodnight_on_off = on_off::OnOffHandler::new_standalone(
         Dataver::new_rand(&mut rng),
-        5,
+        6,
         goodnight_hooks,
     );
 
@@ -625,7 +847,7 @@ fn run_matter(
         &buffers,
         &subscriptions,
         Some(&events),
-        dm_handler(rng, &spa_on_off, &spa_thermostat, &jets_on_off, &lights_on_off, &lights_mode_select, &goodnight_on_off),
+        dm_handler(rng, &spa_on_off, &spa_thermostat, &spa_tuic, &pool_on_off, &pool_thermostat, &pool_tuic, &jets_on_off, &lights_on_off, &lights_identify, &lights_groups, &lights_level, &lights_mode_select, &lights_color, &goodnight_on_off),
     );
 
     let responder = DefaultResponder::new(&dm);
@@ -657,7 +879,7 @@ fn run_matter(
     tracing::info!(
         port = MATTER_PORT,
         discriminator = discriminator,
-        "Matter bridge running (4 endpoints: spa, jets, lights, goodnight)"
+        "Matter bridge running (5 endpoints: spa, pool, jets, lights, goodnight)"
     );
 
     let all = select4(
@@ -682,6 +904,40 @@ async fn run_mdns<C: Crypto>(
     notify: &dyn rs_matter::dm::ChangeNotify,
 ) -> Result<(), Error> {
     run_builtin_mdns(matter, crypto, notify).await
+}
+
+/// Wrapper around a UDP socket that converts IPv4-mapped IPv6 addresses
+/// (e.g. `::ffff:192.168.1.203`) to true IPv4 addresses in `recv_from`.
+///
+/// This fixes a bug in rs-matter's built-in mDNS responder: when the mDNS socket
+/// is dual-stack (IPv6 with `set_only_v6(false)`), the OS reports IPv4 senders as
+/// IPv4-mapped IPv6 addresses.  The responder checks `matches!(addr.ip(), IpAddr::V4(_))`
+/// to decide whether to reply on 224.0.0.251 (IPv4) or ff02::fb (IPv6).  IPv4-mapped
+/// addresses are `IpAddr::V6`, so all replies go to the IPv6 multicast group — which
+/// Google Home (and other IPv4-only mDNS listeners) never receive.
+struct Ipv4MappedFixSocket<'a>(&'a async_io::Async<UdpSocket>);
+
+impl rs_matter::transport::network::NetworkReceive for Ipv4MappedFixSocket<'_> {
+    async fn wait_available(&mut self) -> Result<(), Error> {
+        self.0.readable().await?;
+        Ok(())
+    }
+
+    async fn recv_from(&mut self, buffer: &mut [u8]) -> Result<(usize, rs_matter::transport::network::Address), Error> {
+        let (len, addr) = self.0.recv_from(buffer).await?;
+        // Convert IPv4-mapped IPv6 (::ffff:x.x.x.x) → true IPv4
+        let addr = match addr {
+            std::net::SocketAddr::V6(v6) => {
+                if let Some(ipv4) = v6.ip().to_ipv4_mapped() {
+                    std::net::SocketAddr::V4(std::net::SocketAddrV4::new(ipv4, v6.port()))
+                } else {
+                    addr
+                }
+            }
+            other => other,
+        };
+        Ok((len, rs_matter::transport::network::Address::Udp(addr)))
+    }
 }
 
 async fn run_builtin_mdns<C: Crypto>(
@@ -758,10 +1014,11 @@ async fn run_builtin_mdns<C: Crypto>(
         .get_ref()
         .join_multicast_v4(&MDNS_IPV4_BROADCAST_ADDR, &ipv4_addr)?;
 
+    let recv_socket = Ipv4MappedFixSocket(&socket);
     BuiltinMdnsResponder::new(matter, crypto, notify)
         .run(
             &socket,
-            &socket,
+            recv_socket,
             &Host {
                 id: 0,
                 hostname: "pentair-pool",

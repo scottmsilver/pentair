@@ -5,6 +5,11 @@ use crate::pool_types::PoolSystem;
 /// Cached Matter-relevant state derived from PoolSystem.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct MatterState {
+    pub pool_reachable: bool,
+    pub pool_on: bool,
+    pub pool_temp_matter: i16,
+    pub pool_setpoint_matter: i16,
+    pub pool_system_mode: u8,
     pub spa_reachable: bool,
     pub lights_reachable: bool,
     pub spa_on: bool,
@@ -14,11 +19,17 @@ pub struct MatterState {
     pub jets_on: bool,
     pub lights_on: bool,
     pub light_mode_index: Option<u8>,
+    pub light_mode_name: Option<String>,
 }
 
 impl MatterState {
     pub fn from_pool_system(ps: &PoolSystem, mode_map: &LightModeMap) -> Self {
         Self {
+            pool_reachable: ps.pool.is_some(),
+            pool_on: ps.pool.as_ref().map(|p| p.active).unwrap_or(false),
+            pool_temp_matter: ps.pool.as_ref().map(|p| convert::fahrenheit_to_matter(p.temperature)).unwrap_or(0),
+            pool_setpoint_matter: ps.pool.as_ref().map(|p| convert::fahrenheit_to_matter(p.setpoint)).unwrap_or(0),
+            pool_system_mode: ps.pool.as_ref().map(|p| convert::pentair_heat_mode_to_matter(&p.heat_mode)).unwrap_or(0),
             spa_reachable: ps.spa.is_some(),
             lights_reachable: ps.lights.is_some(),
             spa_on: ps.spa.as_ref().map(|s| s.active).unwrap_or(false),
@@ -28,6 +39,7 @@ impl MatterState {
             jets_on: ps.spa.as_ref().and_then(|s| s.accessories.get("jets").copied()).unwrap_or(false),
             lights_on: ps.lights.as_ref().map(|l| l.on).unwrap_or(false),
             light_mode_index: ps.lights.as_ref().and_then(|l| mode_map.current_mode_index(l.mode.as_deref())),
+            light_mode_name: ps.lights.as_ref().and_then(|l| l.mode.clone()),
         }
     }
 }
@@ -72,6 +84,13 @@ mod tests {
         assert!(state.lights_on);
         assert!(state.lights_reachable);
         assert_eq!(state.light_mode_index, Some(3));
+        assert_eq!(state.light_mode_name, Some("caribbean".to_string()));
+        // Pool fields (from make_pool_system fixture: temp=82, setpoint=59, heat_mode="off")
+        assert!(state.pool_reachable);
+        assert!(!state.pool_on);
+        assert_eq!(state.pool_temp_matter, convert::fahrenheit_to_matter(82));
+        assert_eq!(state.pool_setpoint_matter, convert::fahrenheit_to_matter(59));
+        assert_eq!(state.pool_system_mode, 0); // "off" → 0
     }
 
     #[test]
@@ -104,5 +123,26 @@ mod tests {
         assert_eq!(state.spa_temp_matter, 0);
         assert!(!state.jets_on);
         assert!(!state.lights_on);
+        // Pool is present in this test
+        assert!(state.pool_reachable);
+    }
+
+    #[test]
+    fn handles_missing_pool() {
+        let ps = PoolSystem {
+            pool: None,
+            spa: None,
+            lights: None,
+            system: System { pool_spa_shared_pump: false },
+        };
+        let mode_map = LightModeMap::from_available_modes(&[]);
+        let state = MatterState::from_pool_system(&ps, &mode_map);
+
+        assert!(!state.pool_reachable);
+        assert!(!state.pool_on);
+        assert_eq!(state.pool_temp_matter, 0);
+        assert_eq!(state.pool_setpoint_matter, 0);
+        assert_eq!(state.pool_system_mode, 0);
+        assert!(state.light_mode_name.is_none());
     }
 }

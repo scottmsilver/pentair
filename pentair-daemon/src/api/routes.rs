@@ -15,6 +15,7 @@ use tokio::sync::{broadcast, mpsc};
 
 const INDEX_HTML: &str = include_str!("../../static/index.html");
 const APPROVE_HTML: &str = include_str!("../../static/approve.html");
+const MATTER_HTML: &str = include_str!("../../static/matter.html");
 
 #[derive(Clone)]
 pub struct AppState {
@@ -53,6 +54,7 @@ pub fn router(
         // ── Web UI ─────────────────────────────────────────────────
         .route("/", get(serve_ui))
         .route("/approve", get(serve_approve_page))
+        .route("/matter", get(serve_matter_page))
         .route("/api/approve", post(approve_redirect))
         // ── Semantic API (primary — use these) ──────────────────────
         .route("/api/pool", get(get_pool))
@@ -982,6 +984,10 @@ fn json_to_result(json: &serde_json::Value) -> Result<(), String> {
 struct ApproveQuery {
     email: Option<String>,
     origin: Option<String>,
+}
+
+async fn serve_matter_page() -> impl IntoResponse {
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], MATTER_HTML)
 }
 
 async fn serve_approve_page(

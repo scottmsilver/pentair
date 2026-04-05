@@ -149,7 +149,9 @@ impl mode_select::ClusterHandler for LightModeSelectHandler {
                 self.current_mode.set(new_mode);
                 self.mode_written_locally.set(true);
                 self.dataver.changed();
-                let _ = self.cmd_tx.send(Command::SetLightMode(name.to_string()));
+                if let Err(e) = self.cmd_tx.send(Command::SetLightMode(name.to_string())) {
+                    tracing::error!("Failed to send light mode command: {e}");
+                }
                 Ok(())
             }
             None => Err(Error::new(ErrorCode::InvalidAction)),

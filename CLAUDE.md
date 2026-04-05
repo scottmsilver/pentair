@@ -91,9 +91,20 @@ iOS and Android clients should use the same layering for the same feature. When 
 `pentair-matter` is a sidecar that exposes the pool to Google Home (and any Matter controller) via the Matter protocol. It talks to the daemon's REST API and WebSocket — zero daemon changes needed.
 
 **Endpoints:**
-- Endpoint 2: Spa — Thermostat (temperature, setpoint, heat mode) + OnOff
-- Endpoint 3: Jets — OnOff (auto-enables spa via daemon smart behavior)
-- Endpoint 4: Lights — OnOff + ModeSelect (12 IntelliBrite modes)
+- Endpoint 2: Spa — Thermostat + ThermostatUI (Fahrenheit) + OnOff
+- Endpoint 3: Pool — Thermostat + ThermostatUI (Fahrenheit) + OnOff
+- Endpoint 4: Jets — OnOff (On/Off Plug, auto-enables spa via daemon smart behavior)
+- Endpoint 5: Lights — Extended Color Light (OnOff + LevelControl + ColorControl + ModeSelect + Identify + Groups)
+- Endpoint 6: Goodnight — OnOff (On/Off Plug, momentary)
+
+**Google Home Integration:**
+- Thermostat endpoints show temperature in Fahrenheit via ThermostatUserInterfaceConfiguration cluster (0x0204)
+- Light endpoint uses ColorControl (HS+XY+CT) to map IntelliBrite modes to a color wheel — Google Home shows this on Nest Hub displays (phone app only shows on/off)
+- ModeSelect is also on the light endpoint but Google Home doesn't support it; chip-tool and Apple Home can use it
+- Each bridged endpoint has ProductName + NodeLabel + UniqueID for proper naming in controllers
+- mDNS responder includes IPv4-mapped IPv6 address fix (`Ipv4MappedFixSocket`) required for Google Home discovery
+
+**QR Code Pairing Page:** `http://localhost:8080/matter` — scannable QR code + manual pairing code for Google Home setup.
 
 **Architecture:** rs-matter runs on a dedicated OS thread (embassy async). Tokio handles daemon HTTP/WS. Communication via `std::sync::mpsc` channels and `Arc<Mutex<MatterState>>`.
 
@@ -109,9 +120,10 @@ iOS and Android clients should use the same layering for the same feature. When 
 chip-tool pairing onnetwork 1 20202021
 chip-tool thermostat read local-temperature 1 2
 chip-tool thermostat write occupied-heating-setpoint 4000 1 2
-chip-tool onoff on 1 3                              # jets
-chip-tool modeselect change-to-mode 3 1 4           # caribbean
-chip-tool modeselect read supported-modes 1 4
+chip-tool onoff on 1 4                              # jets
+chip-tool colorcontrol move-to-hue-and-saturation 170 254 0 0 0 1 5  # blue
+chip-tool modeselect change-to-mode 3 1 5           # caribbean
+chip-tool modeselect read supported-modes 1 5
 ```
 
 **Commissioning:** Pairing code `3497-0112-332` (test defaults: discriminator 3840, passcode 20202021). Fabric persisted to `~/.pentair/matter-fabrics.bin`.
@@ -123,7 +135,13 @@ chip-tool modeselect read supported-modes 1 4
 - `pentair-protocol/src/semantic.rs` — topology discovery and semantic model
 - `pentair-daemon/static/index.html` — embedded web UI
 - `pentair-client/tests/live_write.rs` — stateful hardware tests with save/restore
-- `pentair-matter/src/matter_bridge.rs` — Matter bridge topology + OnOff hooks + mDNS
-- `pentair-matter/src/thermostat_handler.rs` — Thermostat cluster (spa temp/setpoint/mode)
-- `pentair-matter/src/mode_select_handler.rs` — ModeSelect cluster (IntelliBrite lights)
+- `pentair-matter/src/matter_bridge.rs` — Matter bridge topology, OnOff hooks, mDNS IPv4 fix, endpoint wiring
+- `pentair-matter/src/thermostat_handler.rs` — Thermostat cluster for spa and pool (temp/setpoint/mode)
+- `pentair-matter/src/thermostat_ui_handler.rs` — ThermostatUserInterfaceConfiguration (Fahrenheit display)
+- `pentair-matter/src/color_control_handler.rs` — ColorControl cluster (HS+XY+CT → IntelliBrite mode mapping)
+- `pentair-matter/src/level_control_handler.rs` — Fixed-brightness LevelControl (pool lights don't dim)
+- `pentair-matter/src/identify_handler.rs` — Stub Identify cluster (required by Extended Color Light)
+- `pentair-matter/src/groups_handler.rs` — Stub Groups cluster (required by Extended Color Light)
+- `pentair-matter/src/mode_select_handler.rs` — ModeSelect cluster (IntelliBrite lights, not used by Google Home)
+- `pentair-daemon/static/matter.html` — Matter QR code pairing page
 - `pentair-matter/tests/chip_tool_e2e.sh` — end-to-end test with chip-tool
