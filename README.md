@@ -211,9 +211,8 @@ This means you can share pool access with family members: they sign in with Goog
 **Setup:**
 
 1. Create a Firebase project and enable Google Sign-In
-2. Update the Firebase config in `static/index.html` with your project's API key, auth domain, and project ID
-3. Set your remote domain in the hostname check (replaces the default)
-4. Deploy behind your tunnel of choice
+2. Fill in the `[web]` and `[web.firebase]` sections in `pentair.toml` with your Firebase credentials and remote domain
+3. Deploy behind your tunnel of choice -- the daemon substitutes the config values into the web UI at serve time
 
 ## Architecture
 
@@ -246,6 +245,20 @@ graph TD
 
 ## Setup After Cloning
 
+The repo ships with `.example` config files. Copy them and fill in your values:
+
+```bash
+# Daemon config (push notifications, remote access, web auth)
+cp pentair.toml.example pentair.toml
+
+# iOS build settings (bundle ID, team ID)
+cp pentair-ios/Instance.xcconfig.example pentair-ios/Instance.xcconfig
+
+# Android app ID (already in gradle.properties, change APPLICATION_ID for your fork)
+```
+
+All instance-specific files are gitignored. No secrets are checked into the repo.
+
 ### Firebase (required for mobile apps and remote access)
 
 1. Create a Firebase project at [console.firebase.google.com](https://console.firebase.google.com)
@@ -255,8 +268,7 @@ graph TD
    - **iOS**: `GoogleService-Info.plist` -> `pentair-ios/PentairIOS/GoogleService-Info.plist`
 4. For push notifications: generate a service account key and save to `~/.pentair/firebase/`
 5. For iOS Live Activities: export an APNs auth key and configure in `pentair.toml`
-
-Config files are gitignored. No secrets are checked into the repo.
+6. For remote web access: fill in `[web]` and `[web.firebase]` sections in `pentair.toml`
 
 ### Google Home Developer Console (required for Matter)
 
@@ -265,21 +277,57 @@ Config files are gitignored. No secrets are checked into the repo.
 3. Set Vendor ID to test VID `0xFFF1`, Product ID `0x8001`
 4. Your Google Home devices (same Google account) will now accept test Matter devices
 
-### Daemon config (optional)
+### Daemon config
 
-The daemon works with zero configuration -- it auto-discovers your adapter. For push notifications and remote access, create `~/.pentair/pentair.toml`:
+The daemon works with zero configuration -- it auto-discovers your adapter. For push notifications and remote access, copy `pentair.toml.example` to `pentair.toml` and fill in your values:
 
 ```toml
 [fcm]
 project_id = "your-firebase-project"
-service_account = "~/.pentair/firebase/your-project-pentair-daemon-fcm.json"
+service_account = "~/.pentair/firebase/your-project-fcm.json"
 
 [apns]
 key_path = "~/.pentair/firebase/AuthKey_XXXXXXXXXX.p8"
 key_id = "XXXXXXXXXX"
 team_id = "XXXXXXXXXX"
 bundle_id = "com.yourname.pentair.ios"
+
+[web]
+remote_domain = "yourdomain.com"
+
+[web.firebase]
+api_key = ""
+auth_domain = ""
+project_id = ""
 ```
+
+### Deploying with Incus (optional)
+
+For production deployment in an isolated container:
+
+```bash
+# Create container
+incus launch images:ubuntu/noble pentair -c boot.autostart=true
+
+# Push pre-built binaries
+incus file push target/release/pentair-daemon pentair/opt/pentair/bin/pentair-daemon
+incus file push target/release/pentair-matter pentair/opt/pentair/bin/pentair-matter
+
+# Push config (set adapter_host since UDP broadcast doesn't cross NAT)
+incus file push pentair.toml pentair/opt/pentair/config/pentair.toml
+
+# Push credentials
+incus file push -r ~/.pentair/firebase/ pentair/root/.pentair/
+
+# Forward ports from host to container
+incus config device add pentair proxy8080 proxy listen=tcp:0.0.0.0:8080 connect=tcp:127.0.0.1:8080
+incus config device add pentair proxy5540 proxy listen=udp:0.0.0.0:5540 connect=udp:127.0.0.1:5540
+
+# Install systemd services inside the container
+# (see pentair-instance repo for service files)
+```
+
+The container auto-starts on boot. The host forwards port 8080 so mDNS, Cloudflare tunnels, and mobile apps all reach the daemon at the host's LAN IP.
 
 ## Testing
 
