@@ -527,11 +527,9 @@ async function refresh() {
       const err = await res.json().catch(() => ({}));
       const email = err.email || '';
       document.getElementById('approveEmail').textContent = email;
-      const addr = '{{DAEMON_LOCAL}}';
-      const origin = encodeURIComponent(location.origin);
       const emailEnc = encodeURIComponent(email);
       document.getElementById('approveLink').href =
-        'http://' + addr + '/approve?email=' + emailEnc + '&origin=' + origin;
+        '/approve?email=' + emailEnc;
       document.getElementById('approveGate').classList.add('visible');
       return;
     }

@@ -104,21 +104,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load or generate network secret for LAN-based remote access approval
     let network_secret = network_secret::load_or_create();
 
-    // Discover LAN IP for the approval flow (UDP trick: no data sent)
-    let port = config.bind.split(':').last().unwrap_or("8080");
-    let daemon_local = match std::net::UdpSocket::bind("0.0.0.0:0") {
-        Ok(sock) => {
-            let _ = sock.connect("8.8.8.8:80");
-            match sock.local_addr() {
-                Ok(addr) => format!("{}:{}", addr.ip(), port),
-                Err(_) => format!("localhost:{}", port),
+    // Discover public IP for proof-of-presence in the approval flow.
+    // When a user approves remote access via the tunnel, we compare their
+    // CF-Connecting-IP to our public IP to verify they're on the home network.
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_default();
+    let public_ip = match http.get("https://api.ipify.org").send().await {
+        Ok(resp) => match resp.text().await {
+            Ok(ip) => {
+                let ip = ip.trim().to_string();
+                info!("public IP for approval flow: {}", ip);
+                Some(ip)
             }
+            Err(e) => {
+                warn!("failed to read public IP response: {}", e);
+                None
+            }
+        },
+        Err(e) => {
+            warn!("failed to discover public IP: {}", e);
+            None
         }
-        Err(_) => format!("localhost:{}", port),
     };
 
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, daemon_local, config.web.clone());
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, public_ip, config.web.clone());
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);

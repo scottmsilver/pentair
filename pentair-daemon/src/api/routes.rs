@@ -26,7 +26,7 @@ pub struct AppState {
     pub scheduled_heat: SharedScheduledHeat,
     pub scenes: SceneStore,
     pub network_secret: String,
-    pub daemon_local: String,
+    pub public_ip: Option<String>,
     pub web: crate::config::WebConfig,
 }
 
@@ -38,7 +38,7 @@ pub fn router(
     scheduled_heat: SharedScheduledHeat,
     scenes: SceneStore,
     network_secret: String,
-    daemon_local: String,
+    public_ip: Option<String>,
     web: crate::config::WebConfig,
 ) -> Router {
     let state = AppState {
@@ -49,7 +49,7 @@ pub fn router(
         scheduled_heat,
         scenes,
         network_secret,
-        daemon_local,
+        public_ip,
         web,
     };
 
@@ -106,7 +106,6 @@ pub fn router(
 
 async fn serve_ui(State(state): State<AppState>) -> impl IntoResponse {
     let replacements = [
-        ("{{DAEMON_LOCAL}}", state.daemon_local.as_str()),
         ("{{FIREBASE_API_KEY}}", state.web.firebase.api_key.as_str()),
         ("{{FIREBASE_AUTH_DOMAIN}}", state.web.firebase.auth_domain.as_str()),
         ("{{FIREBASE_PROJECT_ID}}", state.web.firebase.project_id.as_str()),
@@ -1060,19 +1059,33 @@ fn is_valid_redirect_origin(origin: &str, remote_domain: &str) -> bool {
 #[derive(Deserialize)]
 struct ApproveForm {
     email: String,
-    origin: String,
 }
 
 async fn approve_redirect(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     axum::extract::Form(form): axum::extract::Form<ApproveForm>,
 ) -> impl IntoResponse {
-    let valid_origin = is_valid_redirect_origin(&form.origin, &state.web.remote_domain);
-    if !valid_origin {
+    if state.web.remote_domain.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
             [(header::CONTENT_TYPE, "text/plain".to_string())],
-            "Invalid origin".to_string(),
+            "Remote domain not configured".to_string(),
+        );
+    }
+    // Proof of presence: verify the requester's public IP (from CF-Connecting-IP)
+    // matches our own public IP, proving they're on the same home network.
+    // Reject if the header is missing (blocks direct requests that bypass the tunnel).
+    let client_ip = headers.get("cf-connecting-ip").and_then(|v| v.to_str().ok());
+    let is_local = match (client_ip, state.public_ip.as_deref()) {
+        (Some(cip), Some(pip)) => cip == pip,
+        _ => false,
+    };
+    if !is_local {
+        return (
+            StatusCode::FORBIDDEN,
+            [(header::CONTENT_TYPE, "text/plain".to_string())],
+            "You must be on the home network to approve access.".to_string(),
         );
     }
     let ts = std::time::SystemTime::now()
@@ -1083,9 +1096,20 @@ async fn approve_redirect(
     let email_enc = percent_encoding::utf8_percent_encode(
         &form.email, percent_encoding::NON_ALPHANUMERIC,
     );
+    // Build callback using the request's Host header so it routes back through
+    // the same tunnel hostname (e.g., pool.oursilverfamily.com, not the bare domain).
+    // Validate Host against remote_domain to prevent header injection redirecting
+    // the signed callback to an attacker-controlled domain.
+    let host = headers.get("host")
+        .and_then(|v| v.to_str().ok())
+        .filter(|h| {
+            let rd = &state.web.remote_domain;
+            *h == rd.as_str() || h.ends_with(&format!(".{}", rd))
+        })
+        .unwrap_or(&state.web.remote_domain);
     let callback = format!(
-        "{}/api/approve-callback?email={}&ts={}&sig={}",
-        form.origin, email_enc, ts, sig,
+        "https://{}/api/approve-callback?email={}&ts={}&sig={}",
+        host, email_enc, ts, sig,
     );
     (
         StatusCode::SEE_OTHER,
@@ -1130,10 +1154,171 @@ mod tests {
     fn serve_ui_substitutes_all_vars() {
         // Verify the template vars exist in the raw HTML
         let html = INDEX_HTML;
-        assert!(html.contains("{{DAEMON_LOCAL}}"));
         assert!(html.contains("{{FIREBASE_API_KEY}}"));
         assert!(html.contains("{{FIREBASE_AUTH_DOMAIN}}"));
         assert!(html.contains("{{FIREBASE_PROJECT_ID}}"));
         assert!(html.contains("{{REMOTE_DOMAIN}}"));
+    }
+
+    #[test]
+    fn approve_link_is_relative() {
+        // The approve link must be a relative URL (no LAN IP) so it goes through the tunnel
+        let html = INDEX_HTML;
+        assert!(!html.contains("DAEMON_LOCAL"), "approve link should not reference DAEMON_LOCAL");
+        assert!(html.contains("'/approve?email='"), "approve link should be a relative URL");
+    }
+}
+
+#[cfg(test)]
+mod approve_flow_tests {
+    use super::*;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    fn test_router(public_ip: Option<&str>) -> Router {
+        let shared = crate::state::new_shared_state(
+            vec![],
+            crate::config::HeatingConfig::default(),
+            crate::config::SpaHeatNotificationsConfig::default(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(1);
+        let (push_tx, _) = tokio::sync::broadcast::channel(1);
+        let devices = crate::devices::DeviceManager::load(std::path::PathBuf::from("/dev/null"));
+        let scheduled_heat = crate::scheduled_heat::new_shared_scheduled_heat(
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let scenes = crate::scenes::SceneStore::new(vec![]);
+        let web = crate::config::WebConfig {
+            remote_domain: "example.com".to_string(),
+            firebase: Default::default(),
+        };
+        router(
+            shared, cmd_tx, push_tx, devices, scheduled_heat, scenes,
+            "test-secret".to_string(),
+            public_ip.map(|s| s.to_string()),
+            web,
+        )
+    }
+
+    fn approve_form_body(email: &str) -> String {
+        format!(
+            "email={}",
+            percent_encoding::utf8_percent_encode(email, percent_encoding::NON_ALPHANUMERIC),
+        )
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_missing_cf_connecting_ip() {
+        let app = test_router(Some("1.2.3.4"));
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_wrong_ip() {
+        let app = test_router(Some("1.2.3.4"));
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cf-connecting-ip", "9.9.9.9")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_when_public_ip_unknown() {
+        let app = test_router(None);
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cf-connecting-ip", "1.2.3.4")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn approve_succeeds_when_ip_matches() {
+        let app = test_router(Some("1.2.3.4"));
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cf-connecting-ip", "1.2.3.4")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        // In tests the Host header is absent so it falls back to remote_domain
+        assert!(location.starts_with("https://example.com/api/approve-callback?"),
+            "callback should use host header or remote_domain fallback, got: {}", location);
+        assert!(location.contains("email=user%40test%2Ecom"));
+        assert!(location.contains("&ts="));
+        assert!(location.contains("&sig="));
+    }
+
+    #[tokio::test]
+    async fn approve_rejects_when_remote_domain_empty() {
+        // Build a router with empty remote_domain
+        let shared = crate::state::new_shared_state(
+            vec![],
+            crate::config::HeatingConfig::default(),
+            crate::config::SpaHeatNotificationsConfig::default(),
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let (cmd_tx, _) = tokio::sync::mpsc::channel(1);
+        let (push_tx, _) = tokio::sync::broadcast::channel(1);
+        let devices = crate::devices::DeviceManager::load(std::path::PathBuf::from("/dev/null"));
+        let scheduled_heat = crate::scheduled_heat::new_shared_scheduled_heat(
+            std::path::PathBuf::from("/dev/null"),
+        );
+        let scenes = crate::scenes::SceneStore::new(vec![]);
+        let web = crate::config::WebConfig {
+            remote_domain: "".to_string(),
+            firebase: Default::default(),
+        };
+        let app = router(
+            shared, cmd_tx, push_tx, devices, scheduled_heat, scenes,
+            "test-secret".to_string(), Some("1.2.3.4".to_string()), web,
+        );
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cf-connecting-ip", "1.2.3.4")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn approve_callback_signature_is_valid() {
+        let app = test_router(Some("1.2.3.4"));
+        let body = approve_form_body("user@test.com");
+        let req = Request::post("/api/approve")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cf-connecting-ip", "1.2.3.4")
+            .body(body)
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let location = resp.headers().get("location").unwrap().to_str().unwrap();
+        let url = url::Url::parse(location).unwrap();
+        let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        let email = params.get("email").unwrap();
+        let ts = params.get("ts").unwrap();
+        let sig = params.get("sig").unwrap();
+        // Verify the HMAC matches what the daemon would produce
+        let expected_sig = crate::network_secret::sign("test-secret", email, ts.parse().unwrap());
+        assert_eq!(sig.as_ref(), expected_sig);
     }
 }

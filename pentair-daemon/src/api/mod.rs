@@ -17,8 +17,8 @@ pub fn create_router(
     scheduled_heat: SharedScheduledHeat,
     scenes: SceneStore,
     network_secret: String,
-    daemon_local: String,
+    public_ip: Option<String>,
     web: crate::config::WebConfig,
 ) -> Router {
-    routes::router(state, cmd_tx, push_tx, devices, scheduled_heat, scenes, network_secret, daemon_local, web)
+    routes::router(state, cmd_tx, push_tx, devices, scheduled_heat, scenes, network_secret, public_ip, web)
 }
