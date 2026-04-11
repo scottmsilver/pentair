@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" href="data:,">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Pool</title>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
@@ -440,7 +442,7 @@ body {
     <div class="matter-section" id="matterSection" style="display:none">
       <div class="matter-title">Matter Bridge</div>
       <div class="matter-body">
-        <div class="matter-qr"><img id="matterQr" src="/api/matter/qr" alt="Matter QR Code"></div>
+        <div class="matter-qr"><img id="matterQr" src="data:," alt="Matter QR Code"></div>
         <div class="matter-info">
           <div class="matter-label-txt">Manual code</div>
           <div class="matter-val" id="matterCode">--</div>
@@ -488,7 +490,7 @@ if (needsAuth && typeof firebase !== 'undefined') {
     if (user) {
       authToken = await user.getIdToken();
       document.getElementById('loginGate').classList.add('hidden');
-      refresh(); connectWs();
+      refresh(); connectWs(); loadMatter();
       // Refresh token before expiry
       setInterval(async () => { authToken = await user.getIdToken(true); }, 50 * 60 * 1000);
     } else {
@@ -517,7 +519,9 @@ function authHeaders() {
 async function post(p, b) {
   const o = { method: 'POST', headers: { ...authHeaders() } };
   if (b) { o.headers['Content-Type'] = 'application/json'; o.body = JSON.stringify(b); }
-  return (await fetch(p, o)).json();
+  const res = await fetch(p, o);
+  if (!res.ok) { console.warn('POST', p, res.status); return { ok: false, error: res.status }; }
+  return res.json();
 }
 
 async function refresh() {
@@ -801,28 +805,38 @@ function closeSet() { document.getElementById('ov').classList.remove('open'); se
 function adj(d) { setV = Math.max(40, Math.min(104, setV + d)); document.getElementById('shV').textContent = setV; }
 async function confirmSet() {
   if (!setB) return;
+  const target = setB;
   // Optimistic setpoint
-  const body = setB === 'pool' ? S.pool : S.spa;
+  const body = target === 'pool' ? S.pool : S.spa;
   if (body) body.setpoint = setV;
   closeSet();
   render();
-  post('/api/' + setB + '/heat', { setpoint: setV });
+  post('/api/' + target + '/heat', { setpoint: setV }).catch(() => refresh());
 }
 
 // ── Matter info ──
 async function loadMatter() {
   try {
-    const info = await (await fetch('/api/matter/info')).json();
+    const res = await fetch('/api/matter/info', { headers: authHeaders() });
+    if (!res.ok) return;
+    const info = await res.json();
     if (info.manual_code) {
       document.getElementById('matterCode').textContent = info.manual_code;
       document.getElementById('matterSection').style.display = '';
     }
-  } catch {}
+    if (!info.commissioned) {
+      const qrRes = await fetch('/api/matter/qr', { headers: authHeaders() });
+      if (qrRes.ok) {
+        const blob = await qrRes.blob();
+        const img = document.getElementById('matterQr');
+        if (img.src && img.src.startsWith('blob:')) URL.revokeObjectURL(img.src);
+        img.src = URL.createObjectURL(blob);
+      }
+    }
+  } catch(e) { console.warn('loadMatter:', e); }
 }
-loadMatter();
-
 // On LAN (no auth needed), start immediately. Via tunnel, auth callback starts things.
-if (!needsAuth) { refresh(); connectWs(); }
+if (!needsAuth) { refresh(); connectWs(); loadMatter(); }
 setInterval(refresh, 15000);
 </script>
 </body>

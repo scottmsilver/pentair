@@ -191,8 +191,12 @@ async fn handle_command(
             state: on,
             reply,
         } => {
+            info!("adapter: set circuit {} to {}", circuit_id, if on { "on" } else { "off" });
             let result = client.set_circuit(circuit_id, on).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set circuit {} failed: {}", circuit_id, e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 let _ = refresh_runtime_state(client, state).await;
@@ -207,8 +211,13 @@ async fn handle_command(
             temp,
             reply,
         } => {
+            let body_name = match body_type { 0 => "pool", 1 => "spa", _ => "unknown" };
+            info!("adapter: set {} heat setpoint to {}", body_name, temp);
             let result = client.set_heat_setpoint(body_type, temp).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set {} heat setpoint to {} failed: {}", body_name, temp, e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 let _ = refresh_runtime_state(client, state).await;
@@ -223,8 +232,13 @@ async fn handle_command(
             mode,
             reply,
         } => {
+            let body_name = match body_type { 0 => "pool", 1 => "spa", _ => "unknown" };
+            info!("adapter: set {} heat mode to {}", body_name, mode);
             let result = client.set_heat_mode(body_type, mode).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set {} heat mode failed: {}", body_name, e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 let _ = refresh_runtime_state(client, state).await;
@@ -239,8 +253,13 @@ async fn handle_command(
             temp,
             reply,
         } => {
+            let body_name = match body_type { 0 => "pool", 1 => "spa", _ => "unknown" };
+            info!("adapter: set {} cool setpoint to {}", body_name, temp);
             let result = client.set_cool_setpoint(body_type, temp).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set {} cool setpoint to {} failed: {}", body_name, temp, e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 Ok(())
@@ -249,8 +268,12 @@ async fn handle_command(
             }
         }
         AdapterCommand::SetLightCommand { command, reply } => {
+            info!("adapter: set light command {}", command);
             let result = client.set_light_command(command).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set light command {} failed: {}", command, e);
+            }
             if ok {
                 // Track fire-and-forget light mode in daemon state.
                 let mode_name = match command {
@@ -284,8 +307,12 @@ async fn handle_command(
             }
         }
         AdapterCommand::SetScgConfig { pool, spa, reply } => {
+            info!("adapter: set SCG config pool={} spa={}", pool, spa);
             let result = client.set_scg_config(pool, spa).await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: set SCG config failed: {}", e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 Ok(())
@@ -294,8 +321,12 @@ async fn handle_command(
             }
         }
         AdapterCommand::CancelDelay { reply } => {
+            info!("adapter: cancel delay");
             let result = client.cancel_delay().await;
             let ok = result.is_ok();
+            if let Err(ref e) = result {
+                error!("adapter: cancel delay failed: {}", e);
+            }
             let _ = reply.send(result.map_err(|e| e.to_string()));
             if ok {
                 Ok(())
@@ -304,6 +335,7 @@ async fn handle_command(
             }
         }
         AdapterCommand::RefreshAll { reply } => {
+            info!("adapter: refresh all");
             refresh_all(client, state).await;
             let _ = push_tx.send(PushEvent::StatusChanged);
             let _ = reply.send(Ok(()));

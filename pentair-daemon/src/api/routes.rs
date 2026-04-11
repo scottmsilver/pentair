@@ -12,6 +12,8 @@ use axum::{
 };
 use serde::Deserialize;
 use tokio::sync::{broadcast, mpsc};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::{info, warn, Level};
 
 const INDEX_HTML: &str = include_str!("../../static/index.html");
 const APPROVE_HTML: &str = include_str!("../../static/approve.html");
@@ -100,6 +102,17 @@ pub fn router(
         .route("/api/refresh", post(refresh))
         .route("/api/ws", get(super::websocket::ws_handler))
         .with_state(state)
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                    )
+                })
+                .on_response(DefaultOnResponse::new().level(Level::INFO))
+        )
 }
 
 // ── Web UI ──────────────────────────────────────────────────────────────
@@ -117,7 +130,10 @@ async fn serve_ui(State(state): State<AppState>) -> impl IntoResponse {
     }
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/html")],
+        [
+            (header::CONTENT_TYPE, "text/html"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
         html,
     )
 }
@@ -536,7 +552,13 @@ async fn apply_heat(
         _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "unknown body"}))),
     };
 
+    info!("{} heat request: setpoint={:?} mode={:?}", body_name, body.setpoint, body.mode);
+
     if let Some(setpoint) = body.setpoint {
+        if !(40..=104).contains(&setpoint) {
+            warn!("{} setpoint {} out of range (40-104)", body_name, setpoint);
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"ok": false, "error": "setpoint must be 40-104"})));
+        }
         let (tx, rx) = tokio::sync::oneshot::channel();
         let _ = state
             .cmd_tx
@@ -547,9 +569,15 @@ async fn apply_heat(
             })
             .await;
         match rx.await {
-            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e}))),
-            Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"}))),
-            _ => {}
+            Ok(Err(e)) => {
+                warn!("{} set heat setpoint to {} failed: {}", body_name, setpoint, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e})));
+            }
+            Err(_) => {
+                warn!("{} set heat setpoint to {}: adapter unavailable", body_name, setpoint);
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"})));
+            }
+            Ok(Ok(())) => info!("{} set heat setpoint to {}: ok", body_name, setpoint),
         }
     }
 
@@ -560,6 +588,7 @@ async fn apply_heat(
             "solar-preferred" => 2,
             "heat-pump" | "heater" => 3,
             _ => {
+                warn!("{} unknown heat mode: {}", body_name, mode_str);
                 return (StatusCode::BAD_REQUEST, Json(
                     serde_json::json!({"ok": false, "error": format!("unknown heat mode: {}", mode_str)}),
                 ))
@@ -575,9 +604,15 @@ async fn apply_heat(
             })
             .await;
         match rx.await {
-            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e}))),
-            Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"}))),
-            _ => {}
+            Ok(Err(e)) => {
+                warn!("{} set heat mode to {}: {}", body_name, mode_str, e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e})));
+            }
+            Err(_) => {
+                warn!("{} set heat mode to {}: adapter unavailable", body_name, mode_str);
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"ok": false, "error": "adapter unavailable"})));
+            }
+            Ok(Ok(())) => info!("{} set heat mode to {}: ok", body_name, mode_str),
         }
     }
 
@@ -1027,7 +1062,7 @@ async fn serve_matter_page() -> impl IntoResponse {
     let html = MATTER_HTML
         .replace("/api/matter/qr", &qr_data_url)
         .replace("{{MANUAL_CODE}}", &matter_manual_code());
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html"), (header::CACHE_CONTROL, "no-store")], html)
 }
 
 async fn serve_approve_page(
@@ -1039,11 +1074,12 @@ async fn serve_approve_page(
     let html = APPROVE_HTML
         .replace("{{EMAIL}}", &esc(&email))
         .replace("{{ORIGIN}}", &esc(&origin));
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
+    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html"), (header::CACHE_CONTROL, "no-store")], html)
 }
 
 /// Validate that a redirect origin matches the configured remote domain.
 /// Empty remote_domain rejects all origins (safe default for LAN-only use).
+#[cfg(test)]
 fn is_valid_redirect_origin(origin: &str, remote_domain: &str) -> bool {
     if remote_domain.is_empty() {
         return false;
