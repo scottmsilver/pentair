@@ -35,6 +35,11 @@ struct Cli {
     discriminator: Option<u16>,
     #[arg(long)]
     config: Option<std::path::PathBuf>,
+    /// Pin mDNS to a specific network interface (e.g. enp3s0). Without this,
+    /// the bridge picks the first UP+BROADCAST interface from getifaddrs(),
+    /// which is non-deterministic on hosts with docker/incus/veth bridges.
+    #[arg(long)]
+    interface: Option<String>,
     /// Delete fabric state and re-enter commissioning mode
     #[arg(long)]
     reset_fabric: bool,
@@ -44,7 +49,7 @@ struct Cli {
 async fn main() {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
-    let config = Config::load(cli.daemon_url, cli.discriminator, cli.config);
+    let config = Config::load(cli.daemon_url, cli.discriminator, cli.interface, cli.config);
 
     if cli.reset_fabric {
         if config.fabric_path.exists() {

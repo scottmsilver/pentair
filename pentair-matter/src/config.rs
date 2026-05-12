@@ -6,6 +6,7 @@ pub struct Config {
     pub daemon_url: String,
     pub discriminator: u16,
     pub fabric_path: PathBuf,
+    pub interface: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -13,6 +14,7 @@ struct FileConfig {
     daemon_url: Option<String>,
     discriminator: Option<u16>,
     fabric_path: Option<String>,
+    interface: Option<String>,
 }
 
 impl Config {
@@ -22,6 +24,7 @@ impl Config {
     pub fn load(
         daemon_url: Option<String>,
         discriminator: Option<u16>,
+        interface: Option<String>,
         config_path: Option<PathBuf>,
     ) -> Self {
         let file_config = config_path
@@ -45,6 +48,7 @@ impl Config {
                 .fabric_path
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".pentair").join("matter-fabrics.bin")),
+            interface: interface.or(file_config.interface),
         }
     }
 }
@@ -55,9 +59,10 @@ mod tests {
 
     #[test]
     fn defaults_when_no_args_no_file() {
-        let config = Config::load(None, None, Some(PathBuf::from("/nonexistent")));
+        let config = Config::load(None, None, None, Some(PathBuf::from("/nonexistent")));
         assert_eq!(config.daemon_url, "http://localhost:8080");
         assert_eq!(config.discriminator, 3840);
+        assert_eq!(config.interface, None);
     }
 
     #[test]
@@ -65,10 +70,12 @@ mod tests {
         let config = Config::load(
             Some("http://10.0.0.5:9090".to_string()),
             Some(1234),
+            Some("enp3s0".to_string()),
             Some(PathBuf::from("/nonexistent")),
         );
         assert_eq!(config.daemon_url, "http://10.0.0.5:9090");
         assert_eq!(config.discriminator, 1234);
+        assert_eq!(config.interface.as_deref(), Some("enp3s0"));
     }
 
     #[test]
@@ -79,10 +86,22 @@ mod tests {
         std::fs::write(&path, r#"
             daemon_url = "http://192.168.1.50:8080"
             discriminator = 5555
+            interface = "eth0"
         "#).unwrap();
 
-        let config = Config::load(None, None, Some(path));
+        let config = Config::load(None, None, None, Some(path));
         assert_eq!(config.daemon_url, "http://192.168.1.50:8080");
         assert_eq!(config.discriminator, 5555);
+        assert_eq!(config.interface.as_deref(), Some("eth0"));
+    }
+
+    #[test]
+    fn cli_interface_overrides_file_interface() {
+        let dir = std::env::temp_dir().join("pentair-matter-test-config-iface");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("matter.toml");
+        std::fs::write(&path, r#"interface = "eth0""#).unwrap();
+        let config = Config::load(None, None, Some("enp3s0".to_string()), Some(path));
+        assert_eq!(config.interface.as_deref(), Some("enp3s0"));
     }
 }

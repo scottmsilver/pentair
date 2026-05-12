@@ -167,12 +167,13 @@ pub fn spawn_bridge(
 ) {
     let discriminator = config.discriminator;
     let fabric_path = config.fabric_path.clone();
+    let interface = config.interface.clone();
     let (cmd_tx, cmd_rx) = mpsc::channel();
 
     let handle = std::thread::Builder::new()
         .name("matter-bridge".into())
         .stack_size(550 * 1024)
-        .spawn(move || run_matter(discriminator, fabric_path, shared, cmd_tx, mode_map))
+        .spawn(move || run_matter(discriminator, fabric_path, interface, shared, cmd_tx, mode_map))
         .expect("failed to spawn matter-bridge thread");
 
     (handle, cmd_rx)
@@ -760,6 +761,7 @@ fn dm_handler<'a, OH: OnOffHooks, LH: LevelControlHooks>(
 fn run_matter(
     discriminator: u16,
     fabric_path: std::path::PathBuf,
+    interface: Option<String>,
     shared: Arc<SharedState>,
     cmd_tx: mpsc::Sender<Command>,
     mode_map: crate::light_modes::LightModeMap,
@@ -860,7 +862,7 @@ fn run_matter(
     let mut dm_job = pin!(dm.run());
 
     let socket = async_io::Async::<UdpSocket>::bind(MATTER_SOCKET_BIND_ADDR)?;
-    let mut mdns = pin!(run_mdns(&matter, &crypto, &dm));
+    let mut mdns = pin!(run_mdns(&matter, &crypto, &dm, interface.as_deref()));
     let mut transport = pin!(matter.run(&crypto, &socket, &socket));
 
     let mut psm: Psm<4096> = Psm::new();
@@ -907,8 +909,9 @@ async fn run_mdns<C: Crypto>(
     matter: &Matter<'_>,
     crypto: C,
     notify: &dyn rs_matter::dm::ChangeNotify,
+    interface: Option<&str>,
 ) -> Result<(), Error> {
-    run_builtin_mdns(matter, crypto, notify).await
+    run_builtin_mdns(matter, crypto, notify, interface).await
 }
 
 /// Wrapper around a UDP socket that converts IPv4-mapped IPv6 addresses
@@ -949,21 +952,30 @@ async fn run_builtin_mdns<C: Crypto>(
     matter: &Matter<'_>,
     crypto: C,
     notify: &dyn rs_matter::dm::ChangeNotify,
+    desired_interface: Option<&str>,
 ) -> Result<(), Error> {
     use rs_matter::transport::network::{Ipv4Addr, Ipv6Addr};
 
-    fn initialize_network() -> Result<(Ipv4Addr, Ipv6Addr, u32), Error> {
+    fn initialize_network(desired: Option<&str>) -> Result<(Ipv4Addr, Ipv6Addr, u32), Error> {
         use nix::net::if_::InterfaceFlags;
         use nix::sys::socket::SockaddrIn6;
         use rs_matter::error::ErrorCode;
 
-        let interfaces = || {
-            nix::ifaddrs::getifaddrs().expect("getifaddrs syscall failed").filter(|ia| {
-                ia.flags
+        let want = desired.map(|s| s.to_string());
+        let interfaces = move || {
+            let want = want.clone();
+            nix::ifaddrs::getifaddrs().expect("getifaddrs syscall failed").filter(move |ia| {
+                let flags_ok = ia
+                    .flags
                     .contains(InterfaceFlags::IFF_UP | InterfaceFlags::IFF_BROADCAST)
                     && !ia
                         .flags
-                        .intersects(InterfaceFlags::IFF_LOOPBACK | InterfaceFlags::IFF_POINTOPOINT)
+                        .intersects(InterfaceFlags::IFF_LOOPBACK | InterfaceFlags::IFF_POINTOPOINT);
+                let name_ok = match &want {
+                    Some(name) => &ia.interface_name == name,
+                    None => true,
+                };
+                flags_ok && name_ok
             })
         };
 
@@ -984,7 +996,13 @@ async fn run_builtin_mdns<C: Crypto>(
             })
             .next()
             .ok_or_else(|| {
-                tracing::error!("Cannot find network interface suitable for mDNS broadcasting");
+                match desired {
+                    Some(name) => tracing::error!(
+                        requested = %name,
+                        "Requested interface not found or has no IPv4+IPv6 addresses"
+                    ),
+                    None => tracing::error!("Cannot find network interface suitable for mDNS broadcasting"),
+                }
                 ErrorCode::StdIoError
             })?;
 
@@ -992,13 +1010,14 @@ async fn run_builtin_mdns<C: Crypto>(
             interface = %iname,
             ipv4 = %ip,
             ipv6 = %ipv6,
+            pinned = desired.is_some(),
             "Using network interface for mDNS"
         );
 
         Ok((ip.octets().into(), ipv6.octets().into(), 0))
     }
 
-    let (ipv4_addr, ipv6_addr, interface) = initialize_network()?;
+    let (ipv4_addr, ipv6_addr, interface) = initialize_network(desired_interface)?;
 
     use rs_matter::transport::network::mdns::builtin::{BuiltinMdnsResponder, Host};
     use rs_matter::transport::network::mdns::{
