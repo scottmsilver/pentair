@@ -182,6 +182,8 @@ cargo run -p pentair-matter         # start alongside the daemon
 open http://localhost:8080/matter   # scan QR code with Google Home app
 ```
 
+**Multi-bridge hosts (docker, incus, etc.):** pass `--interface <NAME>` to pin the Matter mDNS responder to a specific interface. Without it, the bridge picks the first UP+BROADCAST entry from `getifaddrs()`, which can land on a private bridge that Google Home cannot reach. The flag is also configurable via `interface = "..."` in `~/.pentair/matter.toml`.
+
 | Device | Google Home type | What it does |
 |--------|-----------------|-------------|
 | Spa | Thermostat (Fahrenheit) | Current temp, setpoint, heat on/off |
