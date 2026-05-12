@@ -32,4 +32,5 @@ class OkHttpDeviceRegistrationClient @Inject constructor(
             if (!it.isSuccessful) throw java.io.IOException("Registration failed: ${it.code}")
         }
     }
+
 }

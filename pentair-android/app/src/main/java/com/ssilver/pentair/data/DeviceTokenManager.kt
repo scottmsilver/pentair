@@ -34,4 +34,5 @@ class DeviceTokenManager @Inject constructor(
         val token = prefs.getString("fcm_token", null) ?: tokenProvider.currentToken() ?: return@withContext
         register(token)
     }
+
 }
