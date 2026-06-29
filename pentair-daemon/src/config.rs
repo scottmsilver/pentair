@@ -51,6 +51,42 @@ pub struct Config {
 
     #[serde(default)]
     pub web: WebConfig,
+
+    /// OpenWeather configuration for the pool-temperature predictor.
+    #[serde(default)]
+    pub weather: WeatherConfig,
+}
+
+/// OpenWeather configuration for the pool-temperature predictor.
+///
+/// `latitude`/`longitude` live in the gitignored `pentair.toml`; the API key is
+/// read ONLY from the `OPENWEATHER_API_KEY` env var and never appears here. A
+/// missing key or `enabled = false` must never break startup.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WeatherConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub latitude: Option<f64>,
+    #[serde(default)]
+    pub longitude: Option<f64>,
+    #[serde(default = "default_weather_poll_interval_seconds")]
+    pub poll_interval_seconds: u64,
+}
+
+impl Default for WeatherConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            latitude: None,
+            longitude: None,
+            poll_interval_seconds: default_weather_poll_interval_seconds(),
+        }
+    }
+}
+
+fn default_weather_poll_interval_seconds() -> u64 {
+    900
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -141,6 +177,45 @@ pub struct HeatingConfig {
     pub pool: BodyHeatingConfig,
     #[serde(default)]
     pub spa: BodyHeatingConfig,
+    /// Covered-when-idle cooling model for the temperature predictor.
+    #[serde(default)]
+    pub cooling: CoolingConfig,
+}
+
+/// Cooling-model configuration for the pool-temperature predictor.
+///
+/// Closed-loop calibration fills and persists the fitted constants; the optional
+/// seeds here only prime the first projection before any calibration has run.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoolingConfig {
+    /// Hard cap on how far forward we project before reverting to "measured N
+    /// ago". The effective cutoff is `min(3*tau, max_projection_hours)`.
+    #[serde(default = "default_max_projection_hours")]
+    pub max_projection_hours: f64,
+    /// Optional seed for the covered-idle relaxation time constant (hours).
+    #[serde(default)]
+    pub tau_covered_hours: Option<f64>,
+    /// Optional Dalton evaporation base coefficient seed (°F/hour per kPa).
+    #[serde(default)]
+    pub evap_a: Option<f64>,
+    /// Optional Dalton evaporation wind coefficient seed (°F/hour per kPa per mph).
+    #[serde(default)]
+    pub evap_b: Option<f64>,
+}
+
+impl Default for CoolingConfig {
+    fn default() -> Self {
+        Self {
+            max_projection_hours: default_max_projection_hours(),
+            tau_covered_hours: None,
+            evap_a: None,
+            evap_b: None,
+        }
+    }
+}
+
+fn default_max_projection_hours() -> f64 {
+    12.0
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -237,6 +312,7 @@ impl Default for Config {
             notifications: Default::default(),
             scenes: Default::default(),
             web: Default::default(),
+            weather: Default::default(),
         }
     }
 }
@@ -253,6 +329,7 @@ impl Default for HeatingConfig {
             heater: Default::default(),
             pool: Default::default(),
             spa: Default::default(),
+            cooling: Default::default(),
         }
     }
 }

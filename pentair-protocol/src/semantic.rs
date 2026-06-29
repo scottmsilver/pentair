@@ -55,6 +55,10 @@ pub struct TemperatureDisplay {
     pub stale_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_reliable_at_unix_ms: Option<i64>,
+    /// True when the body is exposing a forward-projected (predicted) temperature
+    /// the home UI should surface as primary. Additive; old clients ignore it.
+    #[serde(default)]
+    pub is_predicted: bool,
 }
 
 /// UI-oriented server display contract for heat estimate presentation.
@@ -146,6 +150,21 @@ pub struct BodyState {
     pub heating: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heat_estimate: Option<HeatEstimate>,
+    // ── Forward-projected ("predicted") temperature fields (additive). ──
+    // Populated only when the live reading is unreliable and a last-reliable
+    // anchor exists; old clients ignore these.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_temperature: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_temperature_f_precise: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_confidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_uncertainty_f: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_as_of_unix_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_basis: Option<String>,
     pub temperature_display: TemperatureDisplay,
     pub heat_estimate_display: HeatEstimateDisplay,
 }
@@ -170,6 +189,19 @@ pub struct SpaState {
     pub heating: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub heat_estimate: Option<HeatEstimate>,
+    // ── Forward-projected ("predicted") temperature fields (additive). ──
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_temperature: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicted_temperature_f_precise: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_confidence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_uncertainty_f: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_as_of_unix_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prediction_basis: Option<String>,
     pub temperature_display: TemperatureDisplay,
     pub heat_estimate_display: HeatEstimateDisplay,
     /// Server-computed spa heat progress display contract.
@@ -417,11 +449,18 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
             heat_estimate: None,
+            predicted_temperature: None,
+            predicted_temperature_f_precise: None,
+            prediction_confidence: None,
+            prediction_uncertainty_f: None,
+            prediction_as_of_unix_ms: None,
+            prediction_basis: None,
             temperature_display: TemperatureDisplay {
                 value: Some(body.current_temp),
                 is_stale: false,
                 stale_reason: None,
                 last_reliable_at_unix_ms: None,
+                is_predicted: false,
             },
             heat_estimate_display: HeatEstimateDisplay {
                 state: "unavailable".to_string(),
@@ -454,11 +493,18 @@ pub fn build_pool_system(input: &PoolSystemInput) -> (PoolSystem, CircuitMap) {
             heat_mode: fmt_heat_mode(body.heat_mode),
             heating: fmt_heat_status(body.heat_status),
             heat_estimate: None,
+            predicted_temperature: None,
+            predicted_temperature_f_precise: None,
+            prediction_confidence: None,
+            prediction_uncertainty_f: None,
+            prediction_as_of_unix_ms: None,
+            prediction_basis: None,
             temperature_display: TemperatureDisplay {
                 value: Some(body.current_temp),
                 is_stale: false,
                 stale_reason: None,
                 last_reliable_at_unix_ms: None,
+                is_predicted: false,
             },
             heat_estimate_display: HeatEstimateDisplay {
                 state: "unavailable".to_string(),

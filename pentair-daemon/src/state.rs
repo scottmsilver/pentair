@@ -1,6 +1,7 @@
 use crate::config::{HeatingConfig, SpaHeatNotificationsConfig};
 use crate::heat::HeatEstimator;
 use crate::spa_notifications::SpaHeatNotificationEvent;
+use crate::weather::WeatherCache;
 use pentair_protocol::responses::*;
 use pentair_protocol::semantic::{self, CircuitMap, PoolSystem, PoolSystemInput};
 use std::path::PathBuf;
@@ -19,13 +20,15 @@ pub struct CachedState {
     /// Config-driven spa associations (circuit names to treat as spa accessories).
     pub spa_associations: Vec<String>,
     pub heat: HeatEstimator,
+    /// Recent observed + forecast weather samples for the temperature predictor.
+    pub weather: WeatherCache,
     circuit_map: Option<CircuitMap>,
 }
 
 impl CachedState {
     pub fn pool_system(&self) -> Option<PoolSystem> {
         let (mut system, _) = self.build_semantic()?;
-        self.heat.apply_to_system(&mut system);
+        self.heat.apply_to_system(&mut system, &self.weather);
         Some(system)
     }
 
@@ -40,7 +43,7 @@ impl CachedState {
             return (None, Vec::new());
         };
 
-        self.heat.apply_to_system(&mut system);
+        self.heat.apply_to_system(&mut system, &self.weather);
         let events = self.heat.spa_heat_notification_events_for_system(&system);
         (Some(system), events)
     }
@@ -48,6 +51,9 @@ impl CachedState {
     pub fn refresh_semantic_state(&mut self) {
         if let Some((system, map)) = self.build_semantic() {
             self.circuit_map = Some(map);
+            // Closed-loop calibration must run BEFORE `update` overwrites the
+            // stored last-reliable anchor with the fresh reading.
+            self.heat.calibrate_predictions(&system, &self.weather);
             self.heat.update(&system);
         }
     }
@@ -74,7 +80,9 @@ pub fn new_shared_state(
     heating: HeatingConfig,
     spa_notifications: SpaHeatNotificationsConfig,
     heating_history_path: PathBuf,
+    weather_cache_path: PathBuf,
 ) -> SharedState {
+    let weather = WeatherCache::load(&weather_cache_path);
     Arc::new(RwLock::new(CachedState {
         pumps: vec![None; 8],
         spa_associations,
@@ -83,6 +91,7 @@ pub fn new_shared_state(
             spa_notifications,
             heating_history_path,
         ),
+        weather,
         status: None,
         config: None,
         chem: None,

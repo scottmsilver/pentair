@@ -1218,6 +1218,7 @@ mod approve_flow_tests {
             crate::config::HeatingConfig::default(),
             crate::config::SpaHeatNotificationsConfig::default(),
             std::path::PathBuf::from("/dev/null"),
+            std::path::PathBuf::from("/dev/null"),
         );
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(1);
         let (push_tx, _) = tokio::sync::broadcast::channel(1);
@@ -1310,6 +1311,7 @@ mod approve_flow_tests {
             vec![],
             crate::config::HeatingConfig::default(),
             crate::config::SpaHeatNotificationsConfig::default(),
+            std::path::PathBuf::from("/dev/null"),
             std::path::PathBuf::from("/dev/null"),
         );
         let (cmd_tx, _) = tokio::sync::mpsc::channel(1);

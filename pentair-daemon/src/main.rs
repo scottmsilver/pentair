@@ -10,6 +10,8 @@ mod scheduled_heat;
 mod scenes;
 mod spa_notifications;
 mod state;
+mod thermal;
+mod weather;
 
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -38,11 +40,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("starting pentair-daemon, binding to {}", config.bind);
 
     let heating_history_path = resolve_history_path(&config.heating.history_path);
+    // Weather cache lives alongside the heat-estimator store.
+    let weather_cache_path = heating_history_path
+        .parent()
+        .map(|parent| parent.join("weather-cache.json"))
+        .unwrap_or_else(|| PathBuf::from("weather-cache.json"));
     let state = state::new_shared_state(
         config.associations.spa.clone(),
         config.heating.clone(),
         config.notifications.spa_heat.clone(),
         heating_history_path,
+        weather_cache_path.clone(),
     );
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
     let (push_tx, _push_rx) = tokio::sync::broadcast::channel(64);
@@ -77,6 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let adapter_state = state.clone();
     let adapter_host = config.adapter_host.clone();
     let push_tx_adapter = push_tx.clone();
+    let weather_config = config.weather.clone();
     tokio::spawn(async move {
         adapter::run_adapter(
             adapter_host,
@@ -85,6 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             push_tx_adapter,
             fcm_sender,
             apns_sender,
+            weather_config,
+            weather_cache_path,
         )
         .await;
     });

@@ -1,12 +1,15 @@
 use crate::apns::ApnsSender;
+use crate::config::WeatherConfig;
 use crate::fcm::FcmSender;
 use crate::spa_notifications::{notification_text, SpaHeatMilestone, SpaHeatNotificationEvent};
 use crate::state::SharedState;
+use crate::weather::WeatherClient;
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Timelike};
 use pentair_client::client::Client;
 use pentair_client::discovery::discover;
 use pentair_protocol::semantic::PoolSystem;
 use pentair_protocol::types::SLDateTime;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
@@ -61,6 +64,7 @@ pub enum PushEvent {
     MatterRecommission,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_adapter(
     adapter_host: String,
     state: SharedState,
@@ -68,9 +72,18 @@ pub async fn run_adapter(
     push_tx: broadcast::Sender<PushEvent>,
     fcm: Option<Arc<FcmSender>>,
     apns: Option<Arc<ApnsSender>>,
+    weather_config: WeatherConfig,
+    weather_cache_path: PathBuf,
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(60);
+
+    // Build the OpenWeather client once. Disabled, missing lat/lon, or missing
+    // OPENWEATHER_API_KEY all yield `None` so the daemon runs without weather.
+    // Wrapped in an `Arc` so each poll can hand a clone to a detached fetch task
+    // (the fetch must never block the control-loop `select!`).
+    let weather_client = build_weather_client(&weather_config).map(Arc::new);
+    let weather_poll = Duration::from_secs(weather_config.poll_interval_seconds.max(1));
 
     loop {
         info!("connecting to adapter...");
@@ -120,6 +133,7 @@ pub async fn run_adapter(
                 // Main loop: handle commands and periodic refresh
                 let mut refresh_interval = tokio::time::interval(Duration::from_secs(30));
                 let mut ping_interval = tokio::time::interval(Duration::from_secs(60));
+                let mut weather_interval = tokio::time::interval(weather_poll);
 
                 loop {
                     tokio::select! {
@@ -154,6 +168,35 @@ pub async fn run_adapter(
                             if let Err(e) = client.ping().await {
                                 error!("ping failed: {}", e);
                                 break;
+                            }
+                        }
+                        _ = weather_interval.tick() => {
+                            // Decouple the (network) fetch + ingest + persist from
+                            // the control loop: a slow endpoint must never hold up
+                            // the other `select!` arms. The task owns clones of the
+                            // shared state, client, and cache path, so it stays
+                            // correct even if this connection drops underneath it.
+                            if let Some(client) = weather_client.clone() {
+                                let state = state.clone();
+                                let push_tx = push_tx.clone();
+                                let cache_path = weather_cache_path.clone();
+                                tokio::spawn(async move {
+                                    let now_unix_ms = unix_time_ms();
+                                    let result = client.fetch_current().await;
+                                    // Ingest + snapshot while locked, then release
+                                    // the lock BEFORE the synchronous filesystem
+                                    // write so no fs I/O happens under the lock.
+                                    let mut guard = state.write().await;
+                                    let snapshot = guard
+                                        .weather
+                                        .ingest_current(result, now_unix_ms)
+                                        .then(|| guard.weather.clone());
+                                    drop(guard);
+                                    if let Some(weather) = snapshot {
+                                        weather.persist(&cache_path);
+                                        let _ = push_tx.send(PushEvent::StatusChanged);
+                                    }
+                                });
                             }
                         }
                     }
@@ -425,16 +468,45 @@ async fn backfill_last_reliable_from_history(client: &mut Client, state: &Shared
         .unwrap_or_default()
         .as_millis() as i64;
 
-    state
-        .write()
-        .await
-        .heat
-        .seed_last_reliable_from_controller_history(
+    {
+        let mut guard = state.write().await;
+        guard.heat.seed_last_reliable_from_controller_history(
             &history,
             &system_time.time,
             now_unix_ms,
             pool_spa_shared_pump,
         );
+        // Weak prior: seed the covered-idle cooling constant from the same 48h
+        // history (heater-off intervals). No extra controller round-trips.
+        guard.heat.seed_cooling_params_from_history(
+            &history,
+            &system_time.time,
+            now_unix_ms,
+            pool_spa_shared_pump,
+        );
+    }
+}
+
+/// Build the OpenWeather client from config + env, or `None` when weather is
+/// disabled / unconfigured / missing its API key.
+fn build_weather_client(config: &WeatherConfig) -> Option<WeatherClient> {
+    if !config.enabled {
+        return None;
+    }
+    match (config.latitude, config.longitude) {
+        (Some(latitude), Some(longitude)) => WeatherClient::from_env(latitude, longitude),
+        _ => {
+            warn!("weather enabled but latitude/longitude missing; weather disabled");
+            None
+        }
+    }
+}
+
+fn unix_time_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 fn sl_to_naive(time: &SLDateTime) -> Result<NaiveDateTime, ()> {
