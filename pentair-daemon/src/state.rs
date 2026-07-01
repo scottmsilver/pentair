@@ -75,22 +75,26 @@ impl CachedState {
 
 pub type SharedState = Arc<RwLock<CachedState>>;
 
+#[allow(clippy::too_many_arguments)]
 pub fn new_shared_state(
     spa_associations: Vec<String>,
     heating: HeatingConfig,
     spa_notifications: SpaHeatNotificationsConfig,
     heating_history_path: PathBuf,
     weather_cache_path: PathBuf,
+    solar_location: Option<(f64, f64)>,
 ) -> SharedState {
     let weather = WeatherCache::load(&weather_cache_path);
+    let mut heat = HeatEstimator::load_with_notifications(
+        heating,
+        spa_notifications,
+        heating_history_path,
+    );
+    heat.set_solar_location(solar_location);
     Arc::new(RwLock::new(CachedState {
         pumps: vec![None; 8],
         spa_associations,
-        heat: HeatEstimator::load_with_notifications(
-            heating,
-            spa_notifications,
-            heating_history_path,
-        ),
+        heat,
         weather,
         status: None,
         config: None,

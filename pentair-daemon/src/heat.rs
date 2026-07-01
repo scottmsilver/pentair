@@ -251,6 +251,9 @@ pub struct HeatEstimator {
     spa_active_since_unix_ms: Option<i64>,
     pool_last_active_observed: Option<bool>,
     spa_last_active_observed: Option<bool>,
+    /// Site location for the solar-gain term. `None` until configured, in which
+    /// case the solar term is disabled (segments relax toward plain air temp).
+    solar_location: Option<(f64, f64)>,
 }
 
 impl HeatEstimator {
@@ -293,7 +296,54 @@ impl HeatEstimator {
             spa_active_since_unix_ms: None,
             pool_last_active_observed: None,
             spa_last_active_observed: None,
+            solar_location: None,
         }
+    }
+
+    /// Configure the site location used by the solar-gain term. Passing `None`
+    /// (or never calling this) leaves the solar term disabled.
+    pub fn set_solar_location(&mut self, location: Option<(f64, f64)>) {
+        self.solar_location = location;
+    }
+
+    /// The solar-site parameters for this estimator: the configured location
+    /// plus the cover transmission seed, or [`SolarSite::disabled`] when no
+    /// location is configured.
+    fn solar_site(&self) -> thermal::SolarSite {
+        match self.solar_location {
+            Some((lat, lon)) => thermal::SolarSite {
+                latitude_deg: lat,
+                longitude_deg: lon,
+                cover_solar_transmission: self
+                    .config
+                    .cooling
+                    .cover_solar_transmission
+                    .clamp(0.0, 1.0),
+            },
+            None => thermal::SolarSite::disabled(),
+        }
+    }
+
+    /// Effective (fitted-or-seeded) covered-idle cooling params for the **pool**.
+    /// Read-only accessor used by the advisory comfort scheduler — exposes the
+    /// same `(k, g, evap)` the temperature predictor uses, so the plan projects
+    /// passive physics consistently. Does not actuate or mutate anything.
+    pub fn pool_cooling_params(&self) -> CoolingParams {
+        self.cooling_params(HeatingBodyKind::Pool)
+    }
+
+    /// The solar-site parameters (location + cover transmission) used to build
+    /// weather segments for the pool. Read-only accessor for the comfort
+    /// scheduler. Returns [`thermal::SolarSite::disabled`] when no location set.
+    pub fn pool_solar_site(&self) -> thermal::SolarSite {
+        self.solar_site()
+    }
+
+    /// The last reliable pool water temperature (°F), if one is known. Read-only
+    /// accessor used as the comfort scheduler's starting water temperature.
+    pub fn pool_last_reliable_temp_f(&self) -> Option<f64> {
+        self.last_reliable_temperature(HeatingBodyKind::Pool)
+            .map(|obs| obs.temperature as f64)
     }
 
     pub fn update(&mut self, system: &PoolSystem) {
@@ -455,7 +505,10 @@ impl HeatEstimator {
         }
 
         // Air-temperature segments from the same history (cooling-only: no wind /
-        // humidity), so the fit is a plain Newtonian relaxation.
+        // humidity). Real timestamps + the configured site let the fit see any
+        // daytime solar warming intervals; with no location the site is disabled
+        // and the fit reduces to a plain Newtonian relaxation.
+        let site = self.solar_site();
         let mut air_segments: Vec<thermal::WeatherSegment> = history
             .air_temps
             .iter()
@@ -476,6 +529,9 @@ impl HeatEstimator {
                     wind_mph: None,
                     humidity_fraction: None,
                     cloud_fraction: None,
+                    latitude_deg: site.latitude_deg,
+                    longitude_deg: site.longitude_deg,
+                    cover_solar_transmission: site.cover_solar_transmission,
                 })
             })
             .collect();
@@ -612,8 +668,9 @@ impl HeatEstimator {
         let weather_fresh = weather
             .latest_observation()
             .is_some_and(|sample| now_unix_ms - sample.observed_at_unix_ms <= WEATHER_FRESHNESS_MS);
+        let site = self.solar_site();
         let (projected, controller_air_fallback) = if weather_fresh {
-            let segments = weather.to_segments();
+            let segments = weather.to_segments(site);
             (
                 thermal::project_temperature(anchor, &segments, &params, now_unix_ms),
                 false,
@@ -626,6 +683,9 @@ impl HeatEstimator {
                 wind_mph: None,
                 humidity_fraction: None,
                 cloud_fraction: None,
+                latitude_deg: site.latitude_deg,
+                longitude_deg: site.longitude_deg,
+                cover_solar_transmission: site.cover_solar_transmission,
             };
             (
                 thermal::project_temperature(anchor, &[segment], &params, now_unix_ms),
@@ -1231,6 +1291,9 @@ impl HeatEstimator {
             if let Some(evap_b) = cooling.evap_b {
                 params.evap_b = evap_b;
             }
+            if let Some(solar_gain_f) = cooling.solar_gain_f.filter(|g| *g >= 0.0) {
+                params.solar_gain_f = solar_gain_f;
+            }
         }
         params.max_projection_hours = cooling.max_projection_hours.max(0.0);
         params
@@ -1348,7 +1411,7 @@ impl HeatEstimator {
             observed_at_unix_ms: anchor_obs.observed_at_unix_ms,
         };
         let params = self.cooling_params(body);
-        let segments = weather.to_segments();
+        let segments = weather.to_segments(self.solar_site());
         let projected = thermal::project_temperature(anchor, &segments, &params, now_unix_ms);
         // Cannot validate a non-projection (gap beyond cutoff / no weather).
         if !matches!(
@@ -2821,6 +2884,9 @@ mod tests {
             wind_mph: None,
             humidity_fraction: None,
             cloud_fraction: None,
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
         };
 
         let mut total_abs_error = 0.0;

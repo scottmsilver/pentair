@@ -23,7 +23,7 @@
 // exercised by the in-module unit tests, so suppress the dead-code lint.
 #![allow(dead_code)]
 
-use crate::thermal::WeatherSegment;
+use crate::thermal::{SolarSite, WeatherSegment};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::{info, warn};
@@ -114,8 +114,14 @@ pub struct WeatherSample {
 }
 
 impl WeatherSample {
-    /// Project this sample onto a [`WeatherSegment`] spanning `[start, end)`.
-    fn to_segment(self, start_unix_ms: i64, end_unix_ms: i64) -> WeatherSegment {
+    /// Project this sample onto a [`WeatherSegment`] spanning `[start, end)`,
+    /// stamping in the fixed-site solar parameters.
+    fn to_segment(
+        self,
+        start_unix_ms: i64,
+        end_unix_ms: i64,
+        site: SolarSite,
+    ) -> WeatherSegment {
         WeatherSegment {
             start_unix_ms,
             end_unix_ms,
@@ -123,6 +129,9 @@ impl WeatherSample {
             wind_mph: self.wind_mph,
             humidity_fraction: self.humidity_fraction,
             cloud_fraction: self.cloud_fraction,
+            latitude_deg: site.latitude_deg,
+            longitude_deg: site.longitude_deg,
+            cover_solar_transmission: site.cover_solar_transmission,
         }
     }
 }
@@ -437,7 +446,7 @@ impl WeatherCache {
     /// Each sample owns the span from its timestamp to the next sample's
     /// timestamp; the final sample holds for one hour. The thermal projector
     /// clips these to the actual sensing gap.
-    pub fn to_segments(&self) -> Vec<WeatherSegment> {
+    pub fn to_segments(&self, site: SolarSite) -> Vec<WeatherSegment> {
         let mut samples = self.samples.clone();
         samples.sort_by_key(|s| s.observed_at_unix_ms);
         let mut segments = Vec::with_capacity(samples.len());
@@ -451,7 +460,7 @@ impl WeatherCache {
             if end <= start {
                 continue;
             }
-            segments.push(samples[i].to_segment(start, end));
+            segments.push(samples[i].to_segment(start, end, site));
         }
         segments
     }
@@ -600,7 +609,10 @@ mod tests {
         let updated = cache.ingest_current(Err(WeatherError::Status(503)), now);
         assert!(!updated);
         assert_eq!(cache.len(), before);
-        assert!(!cache.to_segments().is_empty(), "last-good still served");
+        assert!(
+            !cache.to_segments(SolarSite::disabled()).is_empty(),
+            "last-good still served"
+        );
     }
 
     // ----- segment building -----
@@ -611,7 +623,7 @@ mod tests {
         let mut cache = WeatherCache::default();
         cache.record_observation(sample(now - 2 * HOUR_MS, 65.0, false), now);
         cache.record_observation(sample(now - HOUR_MS, 66.0, false), now);
-        let segs = cache.to_segments();
+        let segs = cache.to_segments(SolarSite::disabled());
         assert_eq!(segs.len(), 2);
         // First segment ends where the second begins (contiguous).
         assert_eq!(segs[0].end_unix_ms, segs[1].start_unix_ms);

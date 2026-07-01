@@ -55,6 +55,193 @@ pub struct Config {
     /// OpenWeather configuration for the pool-temperature predictor.
     #[serde(default)]
     pub weather: WeatherConfig,
+
+    /// Predictive comfort scheduler (advisory / evaluation only). The feature is
+    /// OFF unless `[comfort].windows` is non-empty. See
+    /// `docs/2026-06-29-pool-comfort-scheduler-v1.md`.
+    #[serde(default)]
+    pub comfort: ComfortConfig,
+
+    /// Gas-heater model parameters for the comfort scheduler.
+    #[serde(default)]
+    pub gasheater: GasHeaterConfig,
+
+    /// Flat natural-gas price for the comfort scheduler's fuel-cost model.
+    #[serde(default)]
+    pub gas: GasConfig,
+
+    /// Time-of-use electricity rates — used only to cost the circulation pump.
+    #[serde(default)]
+    pub rates: RatesConfig,
+}
+
+// ─── Comfort scheduler config (advisory / evaluation only) ──────────────────
+//
+// These sections feed the PURE `scheduler.rs` model. Nothing here actuates: the
+// scheduler only computes and reports a recommended plan + projected cost. The
+// `[comfort].actuate` flag below is RESERVED and INERT — no code in v1 reads it
+// to take an action (see `comfort_enabled` / the read-only `/api/pool/heat-plan`
+// handler). Leaving it `true` changes nothing.
+
+/// `[comfort]` — comfort windows + the reserved (inert) actuate flag.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ComfortConfig {
+    /// RESERVED, NOT IMPLEMENTED in v1. Defaults to `false`. This flag is inert:
+    /// no code path reads it to actuate. It exists only so a future version can
+    /// opt in to actuation behind an explicit toggle. Setting it `true` today
+    /// has no effect whatsoever.
+    ///
+    /// INTENTIONALLY UNREAD: the `dead_code` allow is the compiler-enforced
+    /// proof of inertness — if any future code reads this field to actuate, the
+    /// allow can be removed and the field becomes "used", making the change
+    /// visible in review. Do not wire this to any command path in v1.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub actuate: bool,
+    /// Comfort windows. An empty list (the default) means the feature is OFF.
+    #[serde(default)]
+    pub windows: Vec<ComfortWindowConfig>,
+    /// Local UTC offset in seconds (e.g. `-28800` for PST) used to resolve the
+    /// local-wall-clock windows and rate periods. Defaults to `0` (UTC).
+    #[serde(default)]
+    pub utc_offset_seconds: i64,
+    /// Slot length in hours for the discretized horizon (default 0.5h = 30min).
+    #[serde(default = "default_comfort_slot_hours")]
+    pub slot_hours: f64,
+    /// Planning horizon in hours (default 48h).
+    #[serde(default = "default_comfort_horizon_hours")]
+    pub horizon_hours: f64,
+    /// Constant setpoint (°F) the "dumb" baseline holds for the savings
+    /// comparison. Defaults to the max window target when unset.
+    #[serde(default)]
+    pub baseline_setpoint_f: Option<f64>,
+}
+
+/// One comfort window: `{ days, start, end, target_f }` in local wall-clock.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ComfortWindowConfig {
+    /// 3-letter weekday abbreviations, e.g. `["Sat", "Sun"]`.
+    #[serde(default)]
+    pub days: Vec<String>,
+    /// Window start, `"HH:MM"` local.
+    pub start: String,
+    /// Window end, `"HH:MM"` local (exclusive).
+    pub end: String,
+    /// Target water temperature (°F) to hold across the window.
+    pub target_f: f64,
+}
+
+/// `[gasheater]` — single gas heater: delivered output + combustion efficiency +
+/// circulation-pump draw. A gas heater's output is constant (no COP curve).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GasHeaterConfig {
+    #[serde(default = "default_rated_btu_per_hr")]
+    pub rated_btu_per_hr: f64,
+    /// Combustion efficiency (delivered BTU ÷ gas BTU consumed), e.g. 0.82.
+    #[serde(default = "default_thermal_efficiency")]
+    pub thermal_efficiency: f64,
+    /// Circulation-pump electrical draw while heating (kW), e.g. 0.75.
+    #[serde(default = "default_pump_kw")]
+    pub pump_kw: f64,
+}
+
+impl Default for GasHeaterConfig {
+    fn default() -> Self {
+        Self {
+            rated_btu_per_hr: default_rated_btu_per_hr(),
+            thermal_efficiency: default_thermal_efficiency(),
+            pump_kw: default_pump_kw(),
+        }
+    }
+}
+
+/// `[gas]` — flat natural-gas price (no intraday time-of-use).
+#[derive(Debug, Clone, Deserialize)]
+pub struct GasConfig {
+    #[serde(default = "default_usd_per_therm")]
+    pub usd_per_therm: f64,
+}
+
+impl Default for GasConfig {
+    fn default() -> Self {
+        Self {
+            usd_per_therm: default_usd_per_therm(),
+        }
+    }
+}
+
+/// `[rates]` — time-of-use electricity. Flat `default_usd_per_kwh` when no
+/// periods are configured.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RatesConfig {
+    #[serde(default)]
+    pub periods: Vec<RatePeriodConfig>,
+    #[serde(default = "default_usd_per_kwh")]
+    pub default_usd_per_kwh: f64,
+}
+
+impl Default for RatesConfig {
+    fn default() -> Self {
+        Self {
+            periods: Vec::new(),
+            default_usd_per_kwh: default_usd_per_kwh(),
+        }
+    }
+}
+
+/// One TOU rate period: `{ days, start, end, usd_per_kwh }` in local wall-clock.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RatePeriodConfig {
+    #[serde(default)]
+    pub days: Vec<String>,
+    pub start: String,
+    pub end: String,
+    pub usd_per_kwh: f64,
+}
+
+fn default_comfort_slot_hours() -> f64 {
+    0.5
+}
+fn default_comfort_horizon_hours() -> f64 {
+    48.0
+}
+fn default_rated_btu_per_hr() -> f64 {
+    250_000.0
+}
+fn default_thermal_efficiency() -> f64 {
+    0.82
+}
+fn default_pump_kw() -> f64 {
+    0.75
+}
+fn default_usd_per_therm() -> f64 {
+    1.80
+}
+fn default_usd_per_kwh() -> f64 {
+    0.30
+}
+
+/// Everything the read-only `/api/pool/heat-plan` handler needs from config,
+/// bundled so it can be cloned into the API `AppState` without dragging the
+/// whole `Config`. Advisory only — none of these fields drive actuation.
+#[derive(Debug, Clone, Default)]
+pub struct ComfortPlanConfig {
+    pub comfort: ComfortConfig,
+    pub gasheater: GasHeaterConfig,
+    pub gas: GasConfig,
+    pub rates: RatesConfig,
+    /// Pool volume (gallons) for the thermal-mass term, resolved from
+    /// `[heating.pool]` at startup. `None` disables the plan (no mass known).
+    pub pool_volume_gallons: Option<f64>,
+}
+
+impl ComfortConfig {
+    /// The feature is enabled iff at least one comfort window is configured.
+    /// (The reserved `actuate` flag deliberately plays NO role here — it is
+    /// inert in v1.)
+    pub fn enabled(&self) -> bool {
+        !self.windows.is_empty()
+    }
 }
 
 /// OpenWeather configuration for the pool-temperature predictor.
@@ -201,6 +388,14 @@ pub struct CoolingConfig {
     /// Optional Dalton evaporation wind coefficient seed (°F/hour per kPa per mph).
     #[serde(default)]
     pub evap_b: Option<f64>,
+    /// Optional solar heating-rate coefficient seed `g` (°F·hr⁻¹ per kW/m²).
+    #[serde(default)]
+    pub solar_gain_f: Option<f64>,
+    /// Fraction of incident shortwave the cover passes into the water, in
+    /// `[0, 1]`. A solar/heat-retention cover transmits most of it; the seed is
+    /// high (~0.75) because live validation showed the pool warming under cover.
+    #[serde(default = "default_cover_solar_transmission")]
+    pub cover_solar_transmission: f64,
 }
 
 impl Default for CoolingConfig {
@@ -210,12 +405,18 @@ impl Default for CoolingConfig {
             tau_covered_hours: None,
             evap_a: None,
             evap_b: None,
+            solar_gain_f: None,
+            cover_solar_transmission: default_cover_solar_transmission(),
         }
     }
 }
 
 fn default_max_projection_hours() -> f64 {
     12.0
+}
+
+fn default_cover_solar_transmission() -> f64 {
+    0.75
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -313,6 +514,10 @@ impl Default for Config {
             scenes: Default::default(),
             web: Default::default(),
             weather: Default::default(),
+            comfort: Default::default(),
+            gasheater: Default::default(),
+            gas: Default::default(),
+            rates: Default::default(),
         }
     }
 }
@@ -518,6 +723,67 @@ mod config_tests {
         assert_eq!(config.web.firebase.api_key, "");
         assert_eq!(config.web.firebase.auth_domain, "");
         assert_eq!(config.web.firebase.project_id, "");
+    }
+
+    #[test]
+    fn comfort_disabled_by_default_and_actuate_false() {
+        let config: Config = toml::from_str("").expect("default config should deserialize");
+        assert!(!config.comfort.enabled(), "no windows => feature off");
+        assert!(!config.comfort.actuate, "actuate defaults to false (reserved/inert)");
+        assert!(config.comfort.windows.is_empty());
+        // Gas-heater + gas + rate defaults match the spec.
+        assert_eq!(config.gasheater.rated_btu_per_hr, 250_000.0);
+        assert_eq!(config.gasheater.thermal_efficiency, 0.82);
+        assert_eq!(config.gasheater.pump_kw, 0.75);
+        assert_eq!(config.gas.usd_per_therm, 1.80);
+        assert!(config.rates.periods.is_empty());
+        assert_eq!(config.rates.default_usd_per_kwh, 0.30);
+    }
+
+    #[test]
+    fn comfort_windows_enable_feature() {
+        let config: Config = toml::from_str(
+            r#"
+            [comfort]
+            actuate = true
+            utc_offset_seconds = -28800
+
+            [[comfort.windows]]
+            days = ["Sat", "Sun"]
+            start = "15:00"
+            end = "20:00"
+            target_f = 88.0
+
+            [gasheater]
+            rated_btu_per_hr = 300000
+            thermal_efficiency = 0.85
+
+            [gas]
+            usd_per_therm = 1.95
+
+            [rates]
+            default_usd_per_kwh = 0.25
+            [[rates.periods]]
+            days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+            start = "16:00"
+            end = "21:00"
+            usd_per_kwh = 0.55
+            "#,
+        )
+        .expect("comfort config should deserialize");
+        assert!(config.comfort.enabled());
+        // actuate parses but is never acted upon (inert).
+        assert!(config.comfort.actuate);
+        assert_eq!(config.comfort.utc_offset_seconds, -28800);
+        assert_eq!(config.comfort.windows.len(), 1);
+        assert_eq!(config.comfort.windows[0].target_f, 88.0);
+        assert_eq!(config.gasheater.rated_btu_per_hr, 300000.0);
+        assert_eq!(config.gasheater.thermal_efficiency, 0.85);
+        // pump_kw falls back to its default.
+        assert_eq!(config.gasheater.pump_kw, 0.75);
+        assert_eq!(config.gas.usd_per_therm, 1.95);
+        assert_eq!(config.rates.periods.len(), 1);
+        assert_eq!(config.rates.periods[0].usd_per_kwh, 0.55);
     }
 
     #[test]

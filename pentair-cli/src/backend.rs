@@ -345,6 +345,31 @@ impl Backend {
         }
     }
 
+    /// Fetch the advisory (read-only) comfort heat-plan from the daemon. This is
+    /// a pure GET — the daemon computes a recommended plan + projected savings
+    /// and actuates nothing. Daemon-only (no direct adapter equivalent).
+    pub async fn get_heat_plan(&mut self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        match self {
+            Backend::Direct(_) => Err(
+                "heat-plan requires daemon mode (advisory endpoint lives in the daemon)".into(),
+            ),
+            Backend::Daemon(d) => {
+                // Use the raw HTTP path: the response is a plain JSON object that
+                // can legitimately be `{ "enabled": false }`, which the strict
+                // `get_json` null-check would otherwise be fine with but we want
+                // the full object regardless.
+                let url = format!("{}/api/pool/heat-plan", d.base_url);
+                let resp = d.http.get(&url).send().await?;
+                let status = resp.status();
+                if !status.is_success() {
+                    let body = resp.text().await.unwrap_or_default();
+                    return Err(format!("daemon returned {}: {}", status, body).into());
+                }
+                Ok(resp.json().await?)
+            }
+        }
+    }
+
     pub async fn cancel_delay(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         match self {
             Backend::Direct(client) => Ok(client.cancel_delay().await?),

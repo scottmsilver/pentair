@@ -81,6 +81,13 @@ enum Commands {
     },
     /// Weather forecast
     Weather,
+    /// Show the advisory pool comfort heat plan (READ-ONLY — actuates nothing)
+    HeatPlan {
+        /// Replay over historical weather instead of the live forecast.
+        /// RESERVED / not implemented in v1 (forecast-only stub).
+        #[arg(long, alias = "backfill")]
+        backtest: bool,
+    },
     /// Cancel all delays
     CancelDelay,
     /// Send raw protocol message
@@ -279,6 +286,9 @@ async fn run_connected(
         Commands::History { hours } => commands::history::run(backend, *hours, json).await?,
         Commands::Pump { index } => commands::pump::run(backend, *index, json).await?,
         Commands::Weather => commands::weather::run(backend, json).await?,
+        Commands::HeatPlan { backtest } => {
+            commands::heat_plan::run(backend, *backtest, json).await?
+        }
         Commands::CancelDelay => commands::cancel::run(backend, json).await?,
         Commands::Raw { action, payload } => {
             commands::raw::run(backend, *action, payload.as_deref(), json).await?

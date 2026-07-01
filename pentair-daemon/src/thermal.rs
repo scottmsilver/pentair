@@ -9,10 +9,22 @@
 //!
 //! ```text
 //! dT/dt = -k_eff * (T - T_eq) - q_evap
-//! T_eq  = T_air + solar_bump                 (solar_bump small in v1; clouds-derived)
+//! T_eq  = T_air + (g / k_eff) * I_solar      (clear-sky solar from sun geometry)
 //! k_eff = k0 + k_wind * wind                 (wind folded into cooling)
 //! q_evap = (a + b*wind) * (Psat(T_water) - RH*Psat(T_air))   (Dalton evaporation)
 //! ```
+//!
+//! The solar term is a real daytime heating source, not just a cloud-scaled
+//! offset. `I_solar` (kW/m²) is the clear-sky global horizontal irradiance
+//! derived from the sun's elevation angle for the site's lat/lon and the
+//! segment timestamp, attenuated by cloud cover and the cover's solar
+//! transmission (a solar/heat-retention cover passes most shortwave). `g`
+//! (`solar_gain_f`, °F·hr⁻¹ per kW/m²) is the pool's solar heating-rate
+//! coefficient. Adding `(g / k_eff) * I_solar` to `T_eq` makes the steady-state
+//! relaxation target sit a constant solar bump above air, so a sunny segment
+//! pulls the water toward a *warmer* equilibrium. At night the elevation is
+//! `<= 0`, `I_solar = 0`, and the term vanishes — overnight cooling is
+//! unchanged.
 //!
 //! Within one constant-weather segment the evaporation offset is frozen at the
 //! segment-start water temperature, which lets the ODE collapse to the
@@ -57,6 +69,14 @@ pub struct WeatherSegment {
     pub humidity_fraction: Option<f64>,
     /// Cloud cover as a fraction in `[0, 1]`; `None` disables the solar bump.
     pub cloud_fraction: Option<f64>,
+    /// Site latitude in degrees (north positive). Drives the solar geometry.
+    pub latitude_deg: f64,
+    /// Site longitude in degrees (east positive). Drives the solar geometry.
+    pub longitude_deg: f64,
+    /// Fraction of incident shortwave the cover passes into the water, in
+    /// `[0, 1]`. A solar/heat-retention cover transmits most of it (~0.75);
+    /// an opaque thermal blanket would be much lower.
+    pub cover_solar_transmission: f64,
 }
 
 impl WeatherSegment {
@@ -64,6 +84,37 @@ impl WeatherSegment {
     /// (wind + humidity), enabling the evaporation-aware model.
     fn is_full_weather(&self) -> bool {
         self.wind_mph.is_some() && self.humidity_fraction.is_some()
+    }
+}
+
+/// Fixed-site solar parameters shared by every [`WeatherSegment`]: the location
+/// the sun geometry is computed for, and the cover's shortwave transmission.
+///
+/// `cover_solar_transmission == 0` (and the `disabled` constructor) switches the
+/// solar term off entirely, which is the right default when no location is
+/// configured — segments then relax toward plain air temperature.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SolarSite {
+    pub latitude_deg: f64,
+    pub longitude_deg: f64,
+    pub cover_solar_transmission: f64,
+}
+
+impl SolarSite {
+    /// A site with no solar drive (no location / opaque): segments built from it
+    /// carry `cover_solar_transmission = 0`, so the solar bump is always zero.
+    pub fn disabled() -> Self {
+        Self {
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
+        }
+    }
+}
+
+impl Default for SolarSite {
+    fn default() -> Self {
+        Self::disabled()
     }
 }
 
@@ -89,7 +140,10 @@ pub struct CoolingParams {
     pub evap_a: f64,
     /// Dalton evaporation wind coefficient (°F/hour per kPa per mph).
     pub evap_b: f64,
-    /// Clear-sky solar bump applied to `T_eq` (°F); scaled by `1 - cloud`.
+    /// Solar heating-rate coefficient `g` (°F·hr⁻¹ per kW/m² of absorbed
+    /// irradiance). Enters `T_eq` as `(g / k_eff) * I_solar`, so the daytime
+    /// equilibrium sits a constant solar bump above air. Fit alongside `k0`
+    /// when daytime (solar > 0) intervals are present.
     pub solar_gain_f: f64,
     /// Hard cap on how far forward we project before reverting to measured
     /// (hours). The effective cutoff is `min(3*tau, max_projection_hours)`.
@@ -106,7 +160,12 @@ impl CoolingParams {
             k_wind_per_hour_per_mph: 0.0008,
             evap_a: 0.10,
             evap_b: 0.02,
-            solar_gain_f: 0.0,
+            // g = 0.08 °F·hr⁻¹ per kW/m². With clear-sky midday GHI ~0.9 kW/m²,
+            // a ~0.75-transmission cover and k_eff ~0.02/hr, this seeds a daytime
+            // T_eq bump of (g/k)*I ≈ (0.08/0.02)*0.675 ≈ 2.7 °F above air —
+            // matching the observed ~2-3 °F daytime under-prediction. Refined by
+            // the daytime fit when warming intervals are present.
+            solar_gain_f: 0.08,
             max_projection_hours: 12.0,
         }
     }
@@ -216,6 +275,93 @@ pub struct CoolingFit {
 const TEMP_CLAMP_MIN_F: f64 = -40.0;
 const TEMP_CLAMP_MAX_F: f64 = 140.0;
 
+/// Seconds in a (mean) day, for fractional day-of-year arithmetic.
+const SECONDS_PER_DAY: f64 = 86_400.0;
+
+/// Solar constant proxy used by the Haurwitz clear-sky model (W/m²).
+const HAURWITZ_A: f64 = 1098.0;
+
+// ─── Solar geometry (clear-sky, no weather feed) ───────────────────────────
+
+/// Solar elevation angle (degrees above the horizon) for a site at
+/// `(lat_deg, lon_deg)` at `unix_secs`.
+///
+/// Standard textbook astronomy:
+/// 1. fractional day-of-year `n` and UTC hour from the unix time;
+/// 2. solar declination `decl = 23.45° · sin(360°·(284 + n)/365)`;
+/// 3. solar time from UTC plus a longitude correction `lon/15` hours and the
+///    equation of time, giving the hour angle `H = 15°·(solar_hour − 12)`;
+/// 4. `elevation = asin(sin φ·sin δ + cos φ·cos δ·cos H)`.
+///
+/// **Approximation:** longitude is converted to a local-time offset at the
+/// nominal `15°/hour` and combined with the equation of time (a closed-form
+/// few-minute correction). This is accurate to a few minutes of solar time —
+/// well within the hourly resolution of the weather segments — and needs no
+/// timezone database. Returns `<= 0` (specifically the true, possibly negative
+/// elevation) at night; callers treat any non-positive elevation as "no sun".
+pub fn solar_position(lat_deg: f64, lon_deg: f64, unix_secs: i64) -> f64 {
+    // Day-of-year (fractional) and fractional UTC hour.
+    let days_since_epoch = unix_secs as f64 / SECONDS_PER_DAY;
+    // 1970-01-01 was day-of-year 1; take the fractional position in the year.
+    let day_of_year = (days_since_epoch.rem_euclid(365.25)) + 1.0;
+    let utc_hour = ((unix_secs as f64).rem_euclid(SECONDS_PER_DAY)) / 3600.0;
+
+    let lat = lat_deg.to_radians();
+
+    // Solar declination (degrees → radians).
+    let decl = (23.45 * (360.0 * (284.0 + day_of_year) / 365.0).to_radians().sin()).to_radians();
+
+    // Equation of time (minutes), Spencer/standard approximation.
+    let b = (360.0 * (day_of_year - 81.0) / 364.0).to_radians();
+    let eot_min = 9.87 * (2.0 * b).sin() - 7.53 * b.cos() - 1.5 * b.sin();
+
+    // Solar time (hours): UTC + longitude offset (15°/hr) + equation of time.
+    let solar_hour = utc_hour + lon_deg / 15.0 + eot_min / 60.0;
+    let hour_angle = (15.0 * (solar_hour - 12.0)).to_radians();
+
+    let sin_elev = lat.sin() * decl.sin() + lat.cos() * decl.cos() * hour_angle.cos();
+    sin_elev.clamp(-1.0, 1.0).asin().to_degrees()
+}
+
+/// Clear-sky global horizontal irradiance (W/m²) for a solar `elevation_deg`,
+/// via the Haurwitz model `GHI = 1098 · sin(el) · exp(−0.057 / sin(el))`.
+/// Returns `0` for any non-positive elevation (the sun is at or below the
+/// horizon).
+pub fn clear_sky_ghi(elevation_deg: f64) -> f64 {
+    if elevation_deg <= 0.0 {
+        return 0.0;
+    }
+    let sin_el = elevation_deg.to_radians().sin();
+    if sin_el <= 0.0 {
+        return 0.0;
+    }
+    (HAURWITZ_A * sin_el * (-0.057 / sin_el).exp()).max(0.0)
+}
+
+/// Effective shortwave irradiance reaching the water (W/m²): clear-sky GHI from
+/// sun geometry, attenuated by cloud cover (Kasten-Czeplak
+/// `1 − 0.75·cloud^3.4`) and by the cover's solar transmission.
+///
+/// `cloud_fraction` and `cover_solar_transmission` are clamped to `[0, 1]`.
+/// Night (elevation `<= 0`) yields `0`.
+pub fn effective_irradiance(
+    lat_deg: f64,
+    lon_deg: f64,
+    unix_secs: i64,
+    cloud_fraction: f64,
+    cover_solar_transmission: f64,
+) -> f64 {
+    let elevation = solar_position(lat_deg, lon_deg, unix_secs);
+    let ghi = clear_sky_ghi(elevation);
+    if ghi <= 0.0 {
+        return 0.0;
+    }
+    let cloud = cloud_fraction.clamp(0.0, 1.0);
+    let cloud_attenuation = 1.0 - 0.75 * cloud.powf(3.4);
+    let transmission = cover_solar_transmission.clamp(0.0, 1.0);
+    (ghi * cloud_attenuation * transmission).max(0.0)
+}
+
 /// Saturation vapor pressure of water (kPa) for a temperature in °F, via the
 /// Magnus-Tetens approximation. The input is clamped to a physical range first
 /// so the exponential can never overflow to a non-finite value.
@@ -223,6 +369,36 @@ fn saturation_vapor_pressure_kpa(temp_f: f64) -> f64 {
     let clamped_f = temp_f.clamp(TEMP_CLAMP_MIN_F, TEMP_CLAMP_MAX_F);
     let tc = (clamped_f - 32.0) * 5.0 / 9.0;
     0.610_94 * (17.625 * tc / (tc + 243.04)).exp()
+}
+
+/// Effective solar irradiance (kW/m²) absorbed during a segment, evaluated at
+/// the segment midpoint. Clouds default to clear when unknown; the cover's
+/// transmission scales the shortwave reaching the water. Night → 0.
+fn segment_irradiance_kw(segment: &WeatherSegment) -> f64 {
+    let mid_unix_secs = ((segment.start_unix_ms / 2) + (segment.end_unix_ms / 2)) / 1000;
+    let cloud = segment.cloud_fraction.unwrap_or(0.0);
+    effective_irradiance(
+        segment.latitude_deg,
+        segment.longitude_deg,
+        mid_unix_secs,
+        cloud,
+        segment.cover_solar_transmission,
+    ) / 1000.0
+}
+
+/// Advance the water temperature passively (no heater) across one
+/// constant-weather segment, using the project's single source of truth for the
+/// thermal relaxation (cooling + solar + evaporation). This is a thin public
+/// wrapper over [`relax_over_segment`] so other modules (e.g. the comfort
+/// scheduler's forward sim) can apply the *exact same* passive physics without
+/// duplicating it. `dt_hours <= 0` returns `water_f` unchanged.
+pub fn passive_relax_over_segment(
+    water_f: f64,
+    segment: &WeatherSegment,
+    params: &CoolingParams,
+    dt_hours: f64,
+) -> f64 {
+    relax_over_segment(water_f, segment, params, dt_hours)
 }
 
 /// Advance the water temperature across one constant-weather segment using the
@@ -240,26 +416,31 @@ fn relax_over_segment(
     let wind = segment.wind_mph.unwrap_or(0.0).max(0.0);
     let k_eff = (params.k0_per_hour + params.k_wind_per_hour_per_mph * wind).max(MIN_K_PER_HOUR);
 
-    let solar_bump = match segment.cloud_fraction {
-        Some(cloud) => params.solar_gain_f * (1.0 - cloud.clamp(0.0, 1.0)),
-        None => 0.0,
-    };
+    // Real solar gain: clear-sky irradiance (kW/m²) from sun geometry at the
+    // segment midpoint, raising the relaxation target by (g / k_eff) * I_solar.
+    // Night → I_solar = 0 → no bump → overnight cooling is unchanged.
+    let irradiance_kw = segment_irradiance_kw(segment);
+    let solar_bump = (params.solar_gain_f / k_eff) * irradiance_kw;
     let t_eq = segment.air_temp_f + solar_bump;
 
-    // Dalton evaporation, frozen at the segment-start water temperature. Only
-    // present when humidity is known (full weather); never adds heat.
+    // SIGNED Dalton evaporation, frozen at the segment-start water temperature.
+    // Positive driving (water vapor pressure > humid-air vapor pressure) is an
+    // evaporative LOSS; negative driving (warm, humid air over cooler water) is
+    // a condensation GAIN and is kept, not floored. Only present when humidity
+    // is known (full weather).
     let q_evap = match segment.humidity_fraction {
         Some(rh) => {
             let rh = rh.clamp(0.0, 1.0);
             let driving = saturation_vapor_pressure_kpa(water_f)
                 - rh * saturation_vapor_pressure_kpa(segment.air_temp_f);
-            ((params.evap_a + params.evap_b * wind) * driving).max(0.0)
+            (params.evap_a + params.evap_b * wind) * driving
         }
         None => 0.0,
     };
 
-    // Fold the constant evaporation loss into an effective equilibrium so the
-    // ODE stays a single exponential relaxation.
+    // Fold the constant (signed) evaporation term into an effective equilibrium
+    // so the ODE stays a single exponential relaxation. A negative q_evap raises
+    // t_eq_eff above t_eq (condensation gain); a positive one lowers it (loss).
     let t_eq_eff = t_eq - q_evap / k_eff;
     t_eq_eff + (water_f - t_eq_eff) * (-k_eff * dt_hours).exp()
 }
@@ -396,6 +577,26 @@ fn air_temp_at(weather: &[WeatherSegment], at_unix_ms: i64) -> Option<f64> {
         .map(|s| s.air_temp_f)
 }
 
+/// Effective solar irradiance (kW/m²) at `at_unix_ms`, using the bracketing
+/// segment's lat/lon/cloud/cover. `0` when no segment brackets the instant or
+/// the sun is down.
+fn irradiance_kw_at(weather: &[WeatherSegment], at_unix_ms: i64) -> f64 {
+    let Some(seg) = weather
+        .iter()
+        .find(|s| s.start_unix_ms <= at_unix_ms && at_unix_ms <= s.end_unix_ms)
+    else {
+        return 0.0;
+    };
+    let cloud = seg.cloud_fraction.unwrap_or(0.0);
+    effective_irradiance(
+        seg.latitude_deg,
+        seg.longitude_deg,
+        at_unix_ms / 1000,
+        cloud,
+        seg.cover_solar_transmission,
+    ) / 1000.0
+}
+
 /// Golden-section minimization of a unimodal objective on `[lo, hi]`.
 fn golden_section_min<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64) -> f64 {
     const INV_PHI: f64 = 0.618_033_988_749_895; // 1/phi
@@ -424,13 +625,52 @@ fn golden_section_min<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64) -> f64 
     0.5 * (lo + hi)
 }
 
-/// Fit the effective cooling constant `k0` from reliable cooling samples.
+/// Upper sanity clamp on the fitted solar gain `g` (°F·hr⁻¹ per kW/m²). A
+/// daytime fit is rejected back to the seed `g` if it lands outside `[0, this]`.
+const SOLAR_GAIN_MAX: f64 = 1.0;
+
+/// One usable consecutive-sample interval for the fit:
+/// `(t_start, t_end, dt_hours, air, irradiance_kw_at_midpoint)`.
+type FitPair = (f64, f64, f64, f64, f64);
+
+/// Closed-form least-squares solar gain `g` for a fixed `k` over the daytime
+/// pairs. The one-step prediction is linear in `g`:
+/// `pred = air·(1−e) + (g/k)·I·(1−e) + t0·e`, with `e = exp(−k·dt)`. Returns
+/// `0` when there is no solar leverage (no daytime pairs).
+fn best_solar_gain_for_k(pairs: &[FitPair], k: f64) -> f64 {
+    // Solve min_g Σ (t1 − base − g·x)² where x = (I/k)·(1−e), base = air·(1−e)+t0·e.
+    let mut sxx = 0.0;
+    let mut sxy = 0.0;
+    for &(t0, t1, dt, air, irr) in pairs {
+        let e = (-k * dt).exp();
+        let x = (irr / k) * (1.0 - e);
+        let base = air * (1.0 - e) + t0 * e;
+        sxx += x * x;
+        sxy += x * (t1 - base);
+    }
+    if sxx <= 1.0e-12 {
+        return 0.0;
+    }
+    sxy / sxx
+}
+
+/// One-step prediction under the relaxation-with-solar model.
+fn predict_step(t0: f64, dt: f64, air: f64, irr: f64, k: f64, g: f64) -> f64 {
+    let t_eq = air + (g / k) * irr;
+    t_eq + (t0 - t_eq) * (-k * dt).exp()
+}
+
+/// Fit the effective cooling constant `k0` (and, when daytime intervals are
+/// present, the solar gain `g`) from reliable samples.
 ///
-/// This is the *weak prior* seed: a tiny coarse-grid + golden-section fit over
-/// the Newtonian relaxation model, holding the wind/evaporation/solar
-/// coefficients at the seed. Sanity clamps reject `k <= 0` or `tau` outside
-/// `[2h, 200h]`; any degenerate case falls back to `seed` with `Low` confidence
-/// and never produces a NaN or negative `tau`.
+/// This is the *weak prior* seed: a coarse-grid + golden-section fit over `k`,
+/// with the solar gain solved in closed form (least squares) for each candidate
+/// `k`. The wind/evaporation coefficients are held at the seed. When **no**
+/// daytime (solar > 0) interval is present, `g` is unobservable and stays at the
+/// seed — we never fit an unobservable solar gain from night-only data. Sanity
+/// clamps reject `k <= 0` or `tau` outside `[2h, 200h]`, and a fitted `g`
+/// outside `[0, SOLAR_GAIN_MAX]`; any degenerate case falls back to `seed` with
+/// `Low` confidence and never produces a NaN or negative `tau`.
 pub fn fit_cooling_params(
     samples: &[ReliableSample],
     weather: &[WeatherSegment],
@@ -439,8 +679,8 @@ pub fn fit_cooling_params(
     let mut sorted: Vec<ReliableSample> = samples.to_vec();
     sorted.sort_by_key(|s| s.observed_at_unix_ms);
 
-    // Build (T_start, T_end, dt_hours, air) pairs that have a known air temp.
-    let mut pairs: Vec<(f64, f64, f64, f64)> = Vec::new();
+    // Build (T_start, T_end, dt_hours, air, irradiance) intervals with known air.
+    let mut pairs: Vec<FitPair> = Vec::new();
     for window in sorted.windows(2) {
         let (a, b) = (window[0], window[1]);
         let dt_hours = (b.observed_at_unix_ms - a.observed_at_unix_ms) as f64 / MS_PER_HOUR;
@@ -451,11 +691,13 @@ pub fn fit_cooling_params(
         let Some(air) = air_temp_at(weather, mid) else {
             continue;
         };
-        // Identifiability: a cooling pair must sit above air and not be flat.
-        if (a.temperature_f - air).abs() < 1.0e-3 {
+        let irr = irradiance_kw_at(weather, mid);
+        // Identifiability: an interval must carry leverage — either a non-flat
+        // conductive contrast with air, or some solar drive.
+        if (a.temperature_f - air).abs() < 1.0e-3 && irr <= 0.0 {
             continue;
         }
-        pairs.push((a.temperature_f, b.temperature_f, dt_hours, air));
+        pairs.push((a.temperature_f, b.temperature_f, dt_hours, air, irr));
     }
 
     let degenerate = CoolingFit {
@@ -469,11 +711,20 @@ pub fn fit_cooling_params(
         return degenerate;
     }
 
+    // Only fit g when some interval actually sees the sun; otherwise hold the
+    // seed g (an unobservable solar gain must not be fitted from night data).
+    let has_daytime = pairs.iter().any(|&(.., irr)| irr > 0.0);
+
     let sse = |k: f64| -> f64 {
+        let g = if has_daytime {
+            best_solar_gain_for_k(&pairs, k).clamp(0.0, SOLAR_GAIN_MAX)
+        } else {
+            seed.solar_gain_f
+        };
         pairs
             .iter()
-            .map(|&(t0, t1, dt, air)| {
-                let pred = air + (t0 - air) * (-k * dt).exp();
+            .map(|&(t0, t1, dt, air, irr)| {
+                let pred = predict_step(t0, dt, air, irr, k, g);
                 (pred - t1).powi(2)
             })
             .sum()
@@ -503,13 +754,26 @@ pub fn fit_cooling_params(
         return degenerate;
     }
 
+    // Resolve the solar gain at the chosen k (seed when unobservable).
+    let g = if has_daytime {
+        let fitted = best_solar_gain_for_k(&pairs, k);
+        if fitted.is_finite() && (0.0..=SOLAR_GAIN_MAX).contains(&fitted) {
+            fitted
+        } else {
+            seed.solar_gain_f
+        }
+    } else {
+        seed.solar_gain_f
+    };
+
     let mut params = *seed;
     params.k0_per_hour = k;
+    params.solar_gain_f = g;
 
     let mae = pairs
         .iter()
-        .map(|&(t0, t1, dt, air)| {
-            let pred = air + (t0 - air) * (-k * dt).exp();
+        .map(|&(t0, t1, dt, air, irr)| {
+            let pred = predict_step(t0, dt, air, irr, k, g);
             (pred - t1).abs()
         })
         .sum::<f64>()
@@ -544,6 +808,7 @@ mod tests {
         }
     }
 
+    /// A cooling-only segment with the solar term disabled (cover = 0).
     fn cooling_only_segment(start: i64, end: i64, air: f64) -> WeatherSegment {
         WeatherSegment {
             start_unix_ms: start,
@@ -552,6 +817,9 @@ mod tests {
             wind_mph: None,
             humidity_fraction: None,
             cloud_fraction: None,
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
         }
     }
 
@@ -563,7 +831,48 @@ mod tests {
             wind_mph: Some(wind),
             humidity_fraction: Some(rh),
             cloud_fraction: Some(0.5),
+            // Solar disabled by default so existing assertions are unchanged.
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
         }
+    }
+
+    /// A daytime solar-enabled segment for a fixed N-hemisphere site. The
+    /// timestamp is chosen near local solar noon by the caller.
+    fn solar_segment(
+        start: i64,
+        end: i64,
+        air: f64,
+        lat: f64,
+        lon: f64,
+        cloud: f64,
+        cover: f64,
+    ) -> WeatherSegment {
+        WeatherSegment {
+            start_unix_ms: start,
+            end_unix_ms: end,
+            air_temp_f: air,
+            wind_mph: None,
+            humidity_fraction: None,
+            cloud_fraction: Some(cloud),
+            latitude_deg: lat,
+            longitude_deg: lon,
+            cover_solar_transmission: cover,
+        }
+    }
+
+    // A fixed site for solar tests: Los Altos, CA (lon ~ −122°, UTC−8 nominal),
+    // so local solar noon is ~20:00 UTC. Helpers below build unix times in UTC.
+    const SITE_LAT: f64 = 37.38;
+    const SITE_LON: f64 = -122.11;
+
+    /// Unix seconds for a given (year-independent) day-of-year and UTC hour,
+    /// anchored at a recent year so the solar geometry is representative.
+    fn unix_secs_for(day_of_year: i64, utc_hour: f64) -> i64 {
+        // 2024-01-01T00:00:00Z = 1_704_067_200.
+        let year_start = 1_704_067_200i64;
+        year_start + (day_of_year - 1) * 86_400 + (utc_hour * 3600.0) as i64
     }
 
     /// Conduction-only params (no wind/evap/solar), tau = 1/k0.
@@ -681,6 +990,35 @@ mod tests {
             "drier air -> more evaporative loss: dry {} vs humid {}",
             dry_out.predicted_f,
             humid_out.predicted_f
+        );
+    }
+
+    #[test]
+    fn evaporation_is_signed_condensation_adds_heat() {
+        // Warm, very humid air over cooler water: air vapor pressure exceeds the
+        // water's, so the SIGNED Dalton term is negative -> condensation GAIN.
+        // The gain must NOT be floored away; the humid case should end WARMER
+        // than the pure-conduction (humidity-unknown) case.
+        let params = CoolingParams {
+            k0_per_hour: 0.02,
+            k_wind_per_hour_per_mph: 0.0,
+            evap_a: 0.2,
+            evap_b: 0.0,
+            solar_gain_f: 0.0,
+            max_projection_hours: 48.0,
+        };
+        let now = 2 * HOUR_MS;
+        let humid = full_segment(0, now, 90.0, 0.0, 0.98);
+        let mut no_evap = full_segment(0, now, 90.0, 0.0, 0.98);
+        no_evap.humidity_fraction = None; // pure conduction, no evap term
+
+        let humid_out = project_temperature(anchor(70.0, 0), &[humid], &params, now);
+        let cond_out = project_temperature(anchor(70.0, 0), &[no_evap], &params, now);
+        assert!(
+            humid_out.predicted_f > cond_out.predicted_f,
+            "condensation gain should warm water beyond conduction: humid {} !> conduction {}",
+            humid_out.predicted_f,
+            cond_out.predicted_f
         );
     }
 
@@ -857,5 +1195,307 @@ mod tests {
     #[test]
     fn saturation_pressure_increases_with_temperature() {
         assert!(saturation_vapor_pressure_kpa(90.0) > saturation_vapor_pressure_kpa(60.0));
+    }
+
+    // ----- solar geometry -----
+
+    #[test]
+    fn solar_elevation_zero_at_night_peaks_at_solar_noon() {
+        // Summer day-of-year ~172 (≈ Jun 21). Local solar noon ≈ 20:00 UTC here.
+        let doy = 172;
+        let midnight = solar_position(SITE_LAT, SITE_LON, unix_secs_for(doy, 8.0)); // ~local midnight
+        let noon = solar_position(SITE_LAT, SITE_LON, unix_secs_for(doy, 20.0)); // ~local noon
+
+        assert!(midnight <= 0.0, "sun should be down at local midnight: {midnight}");
+        assert!(noon > 60.0, "summer noon sun should be high: {noon}");
+
+        // Noon is the daytime maximum: a couple of hours either side is lower.
+        let morning = solar_position(SITE_LAT, SITE_LON, unix_secs_for(doy, 17.0));
+        let afternoon = solar_position(SITE_LAT, SITE_LON, unix_secs_for(doy, 23.0));
+        assert!(noon > morning && noon > afternoon, "noon is the peak");
+    }
+
+    #[test]
+    fn solar_noon_higher_in_summer_than_winter() {
+        let summer = solar_position(SITE_LAT, SITE_LON, unix_secs_for(172, 20.0)); // Jun
+        let winter = solar_position(SITE_LAT, SITE_LON, unix_secs_for(355, 20.0)); // Dec
+        assert!(
+            summer > winter + 20.0,
+            "N-hemisphere summer noon higher than winter: summer {summer} vs winter {winter}"
+        );
+        assert!(winter > 0.0, "winter noon sun is still up: {winter}");
+    }
+
+    #[test]
+    fn clear_sky_ghi_zero_at_night_positive_at_midday_and_monotonic() {
+        assert_eq!(clear_sky_ghi(0.0), 0.0);
+        assert_eq!(clear_sky_ghi(-10.0), 0.0);
+        assert!(clear_sky_ghi(60.0) > 0.0);
+        // Monotonic increasing in elevation across the daytime range.
+        let mut prev = clear_sky_ghi(1.0);
+        for el in [5.0, 15.0, 30.0, 45.0, 60.0, 80.0, 90.0] {
+            let ghi = clear_sky_ghi(el);
+            assert!(ghi > prev, "GHI should rise with elevation at {el}: {ghi} <= {prev}");
+            prev = ghi;
+        }
+        // Sanity: midday clear-sky GHI is in a physical ballpark (W/m²).
+        assert!((700.0..1100.0).contains(&clear_sky_ghi(90.0)));
+    }
+
+    #[test]
+    fn cloud_cover_reduces_effective_irradiance() {
+        let noon = unix_secs_for(172, 20.0);
+        let clear = effective_irradiance(SITE_LAT, SITE_LON, noon, 0.0, 0.75);
+        let cloudy = effective_irradiance(SITE_LAT, SITE_LON, noon, 1.0, 0.75);
+        assert!(clear > 0.0);
+        assert!(cloudy < 0.3 * clear, "full cloud near-zeroes irradiance: {cloudy} vs {clear}");
+        // Partial cloud sits between.
+        let partial = effective_irradiance(SITE_LAT, SITE_LON, noon, 0.5, 0.75);
+        assert!(partial < clear && partial > cloudy);
+    }
+
+    #[test]
+    fn effective_irradiance_zero_at_night() {
+        let night = unix_secs_for(172, 8.0);
+        assert_eq!(
+            effective_irradiance(SITE_LAT, SITE_LON, night, 0.0, 0.75),
+            0.0
+        );
+    }
+
+    #[test]
+    fn cover_transmission_scales_irradiance() {
+        let noon = unix_secs_for(172, 20.0);
+        let opaque = effective_irradiance(SITE_LAT, SITE_LON, noon, 0.0, 0.2);
+        let solar_cover = effective_irradiance(SITE_LAT, SITE_LON, noon, 0.0, 0.75);
+        assert!(solar_cover > opaque * 3.0, "higher transmission passes more: {solar_cover} vs {opaque}");
+    }
+
+    // ----- solar feeds T_eq -----
+
+    /// Params with a real solar gain but no evaporation, so the only daytime
+    /// effect is the solar bump on T_eq.
+    fn solar_params(k0: f64, g: f64) -> CoolingParams {
+        CoolingParams {
+            k0_per_hour: k0,
+            k_wind_per_hour_per_mph: 0.0,
+            evap_a: 0.0,
+            evap_b: 0.0,
+            solar_gain_f: g,
+            max_projection_hours: 48.0,
+        }
+    }
+
+    #[test]
+    fn midday_segment_raises_t_eq_above_air() {
+        // Pool starts AT air; the only thing that can move it is solar. A sunny
+        // midday segment must warm the water above air (T_eq > air).
+        let params = solar_params(0.05, 0.08);
+        let noon_ms = unix_secs_for(172, 20.0) * 1000;
+        let start = noon_ms;
+        let end = noon_ms + HOUR_MS;
+        let seg = solar_segment(start, end, 80.0, SITE_LAT, SITE_LON, 0.0, 0.75);
+        let out = project_temperature(anchor(80.0, start), &[seg], &params, end);
+        assert!(
+            out.predicted_f > 80.0,
+            "midday solar should warm water above air: {}",
+            out.predicted_f
+        );
+    }
+
+    #[test]
+    fn night_segment_leaves_t_eq_at_air_no_solar() {
+        // Same params, but a night segment: no solar, so the water just relaxes
+        // toward air (here it starts at air, so it stays at air).
+        let params = solar_params(0.05, 0.08);
+        let night_ms = unix_secs_for(172, 8.0) * 1000;
+        let start = night_ms;
+        let end = night_ms + HOUR_MS;
+        let seg = solar_segment(start, end, 80.0, SITE_LAT, SITE_LON, 0.0, 0.75);
+        let out = project_temperature(anchor(80.0, start), &[seg], &params, end);
+        assert!(
+            (out.predicted_f - 80.0).abs() < 1.0e-6,
+            "night has no solar; water stays at air: {}",
+            out.predicted_f
+        );
+    }
+
+    #[test]
+    fn sunny_gap_yields_less_cooling_than_no_solar_baseline() {
+        // A pool warmer than air over a sunny midday gap: solar offsets cooling,
+        // so the solar projection ends WARMER than the no-solar baseline.
+        let k0 = 0.05;
+        let with_solar = solar_params(k0, 0.08);
+        let no_solar = solar_params(k0, 0.0);
+        let noon_ms = unix_secs_for(172, 19.0) * 1000;
+        let start = noon_ms;
+        let end = noon_ms + 3 * HOUR_MS;
+        let seg = solar_segment(start, end, 85.0, SITE_LAT, SITE_LON, 0.0, 0.75);
+
+        let warm = project_temperature(anchor(89.0, start), &[seg], &with_solar, end);
+        let base = project_temperature(anchor(89.0, start), &[seg], &no_solar, end);
+        assert!(
+            warm.predicted_f > base.predicted_f,
+            "solar reduces daytime cooling: solar {} vs baseline {}",
+            warm.predicted_f,
+            base.predicted_f
+        );
+    }
+
+    #[test]
+    fn overnight_projection_unchanged_by_solar_gain() {
+        // The overnight-cooling regression guard: with the sun down, a non-zero
+        // solar gain must produce EXACTLY the no-solar result.
+        let k0 = 0.05;
+        let with_solar = solar_params(k0, 0.08);
+        let no_solar = solar_params(k0, 0.0);
+        // Night window entirely before local sunrise.
+        let night_ms = unix_secs_for(172, 6.0) * 1000;
+        let start = night_ms;
+        let end = night_ms + 4 * HOUR_MS;
+        let seg = solar_segment(start, end, 70.0, SITE_LAT, SITE_LON, 0.0, 0.75);
+
+        let a = project_temperature(anchor(85.0, start), &[seg], &with_solar, end);
+        let b = project_temperature(anchor(85.0, start), &[seg], &no_solar, end);
+        assert_eq!(a.predicted_f, b.predicted_f, "overnight must be solar-independent");
+        assert!(a.predicted_f < 85.0, "still cools overnight");
+    }
+
+    // ----- fit recovers g -----
+
+    /// Synthetic daytime warming under a known (k, g): a pool sitting near air
+    /// that the sun lifts above air, sampled hourly across solar noon.
+    fn synthetic_daytime(
+        start_temp: f64,
+        air: f64,
+        k: f64,
+        g: f64,
+        first_utc_hour: f64,
+        count: usize,
+    ) -> (Vec<ReliableSample>, Vec<WeatherSegment>) {
+        let doy = 172;
+        let mut samples = Vec::new();
+        let mut weather = Vec::new();
+        let mut t = start_temp;
+        for i in 0..count {
+            let secs = unix_secs_for(doy, first_utc_hour + i as f64);
+            let at_ms = secs * 1000;
+            samples.push(ReliableSample {
+                temperature_f: t,
+                observed_at_unix_ms: at_ms,
+            });
+            // Hourly solar-enabled segment bracketing this step.
+            let seg = solar_segment(
+                at_ms,
+                at_ms + HOUR_MS,
+                air,
+                SITE_LAT,
+                SITE_LON,
+                0.0,
+                0.75,
+            );
+            // Advance one hour under the true model for the next sample.
+            let irr = segment_irradiance_kw(&seg);
+            let t_eq = air + (g / k) * irr;
+            t = t_eq + (t - t_eq) * (-k).exp();
+            weather.push(seg);
+        }
+        (samples, weather)
+    }
+
+    #[test]
+    fn fit_recovers_known_g_from_daytime_warming() {
+        let seed = CoolingParams::seed();
+        let k_true = 0.05;
+        let g_true = 0.12;
+        // Start at air so the warming is purely solar-driven, across solar noon.
+        let (samples, weather) = synthetic_daytime(80.0, 80.0, k_true, g_true, 16.0, 9);
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        assert!(
+            (fit.params.solar_gain_f - g_true).abs() < 2.0e-2,
+            "recovered g {} vs true {}",
+            fit.params.solar_gain_f,
+            g_true
+        );
+        // k stays in bounds and g is non-negative.
+        assert!(fit.params.solar_gain_f >= 0.0);
+        let tau = 1.0 / fit.params.k0_per_hour;
+        assert!((TAU_MIN_HOURS..=TAU_MAX_HOURS).contains(&tau));
+    }
+
+    #[test]
+    fn fit_leaves_g_at_seed_for_night_only_data() {
+        // Night-only cooling data: g is unobservable, so the fit must leave it at
+        // the seed (never fit an unobservable solar gain).
+        let mut seed = CoolingParams::seed();
+        seed.solar_gain_f = 0.33; // distinctive seed to detect any change
+        let k_true = 0.05;
+        // Pure Newtonian cooling toward air, all at night (sun down).
+        let air = 60.0;
+        let mut samples = Vec::new();
+        let mut weather = Vec::new();
+        let mut t = 90.0;
+        for i in 0..8 {
+            let secs = unix_secs_for(172, 4.0 + i as f64 * 0.4); // pre-dawn window
+            let at_ms = secs * 1000;
+            samples.push(ReliableSample {
+                temperature_f: t,
+                observed_at_unix_ms: at_ms,
+            });
+            let dt_h = 0.4;
+            weather.push(solar_segment(
+                at_ms,
+                at_ms + (dt_h * MS_PER_HOUR) as i64,
+                air,
+                SITE_LAT,
+                SITE_LON,
+                0.0,
+                0.75,
+            ));
+            t = air + (t - air) * (-k_true * dt_h).exp();
+        }
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        assert_eq!(
+            fit.params.solar_gain_f, seed.solar_gain_f,
+            "night-only data must leave g at the seed"
+        );
+        // k is still recovered from the night cooling.
+        assert!((fit.params.k0_per_hour - k_true).abs() < 1.0e-2);
+    }
+
+    #[test]
+    fn fit_clamps_unphysical_solar_gain_to_seed() {
+        // Construct daytime data demanding a huge g (water leaps far above air in
+        // an hour). The fit must reject it back to the seed g, not emit garbage.
+        let mut seed = CoolingParams::seed();
+        seed.solar_gain_f = 0.07;
+        let air = 80.0;
+        let noon = unix_secs_for(172, 20.0);
+        let mut samples = Vec::new();
+        let mut weather = Vec::new();
+        for i in 0..4 {
+            let secs = noon + i as i64 * 3600;
+            let at_ms = secs * 1000;
+            // Implausible 20°F/hr jumps above air.
+            samples.push(ReliableSample {
+                temperature_f: air + 50.0 * (i as f64),
+                observed_at_unix_ms: at_ms,
+            });
+            weather.push(solar_segment(
+                at_ms,
+                at_ms + HOUR_MS,
+                air,
+                SITE_LAT,
+                SITE_LON,
+                0.0,
+                0.75,
+            ));
+        }
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        assert!(
+            (0.0..=SOLAR_GAIN_MAX).contains(&fit.params.solar_gain_f),
+            "fitted g must stay within sanity clamps: {}",
+            fit.params.solar_gain_f
+        );
     }
 }

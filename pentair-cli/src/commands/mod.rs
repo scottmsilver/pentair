@@ -4,6 +4,7 @@ pub mod chlor;
 pub mod circuit;
 pub mod discover;
 pub mod heat;
+pub mod heat_plan;
 pub mod history;
 pub mod light;
 pub mod pump;

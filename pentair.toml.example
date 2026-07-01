@@ -19,3 +19,46 @@ remote_domain = "yourdomain.com"
 api_key = ""
 auth_domain = ""
 project_id = ""
+
+# ── Predictive pool comfort scheduler (ADVISORY / EVALUATION ONLY) ──────────
+# This feature NEVER actuates: it only computes and reports a recommended
+# heating plan + projected energy/cost. See
+# docs/2026-06-29-pool-comfort-scheduler-v1.md. The feature is OFF unless
+# [comfort].windows is non-empty.
+[comfort]
+actuate = false                 # RESERVED, NOT IMPLEMENTED — inert in v1.
+utc_offset_seconds = -28800     # local offset for windows/rates (-8h = PST)
+slot_hours = 0.5                # planning granularity (30 min)
+horizon_hours = 48.0
+# baseline_setpoint_f = 88.0    # constant-setpoint baseline (defaults to max target)
+# [[comfort.windows]]
+# days = ["Sat", "Sun"]
+# start = "15:00"
+# end = "20:00"
+# target_f = 88.0
+
+[heatpump]
+rated_btu_per_hr = 100000
+cop_at_50f = 3.0
+cop_per_f = 0.06                # COP rises ~0.06 per °F of air temp
+cop_max = 6.0
+
+[rates]                         # default flat if no periods
+default_usd_per_kwh = 0.30
+# [[rates.periods]]
+# days = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+# start = "16:00"
+# end = "21:00"
+# usd_per_kwh = 0.55
+
+# ── Evaluating the scheduler (read-only; actuates nothing) ──────────────────
+# Live forecast plan (asks the daemon's read-only /api/pool/heat-plan):
+#     pentair-cli heat-plan
+# Backtest: replay the recorded weather log as the forecast and print a
+# MODEL-PROJECTED savings report (optimizer vs constant-setpoint). Reads
+# ~/.config/pool-temp/logs/monitor.jsonl; no daemon required; changes nothing:
+#     pentair-cli heat-plan --backtest
+#     pentair-cli --json heat-plan --backtest    # machine-readable
+# The backtest's energy/$ are model-projected (no real meter) and use spec
+# defaults (spec heat pump, PG&E-like peak 16:00–21:00, Sat/Sun 15:00–20:00 @
+# 88°F, 20k-gal pool, seed (k,g)) since the CLI has no config plumbing in v1.

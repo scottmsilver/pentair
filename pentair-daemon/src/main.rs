@@ -7,6 +7,7 @@ mod fcm;
 mod heat;
 mod network_secret;
 mod scheduled_heat;
+mod scheduler;
 mod scenes;
 mod spa_notifications;
 mod state;
@@ -45,12 +46,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parent()
         .map(|parent| parent.join("weather-cache.json"))
         .unwrap_or_else(|| PathBuf::from("weather-cache.json"));
+    // Solar-gain location: only when both coordinates are configured (and weather
+    // is enabled), otherwise the solar term stays disabled.
+    let solar_location = match (config.weather.latitude, config.weather.longitude) {
+        (Some(lat), Some(lon)) if config.weather.enabled => Some((lat, lon)),
+        _ => None,
+    };
     let state = state::new_shared_state(
         config.associations.spa.clone(),
         config.heating.clone(),
         config.notifications.spa_heat.clone(),
         heating_history_path,
         weather_cache_path.clone(),
+        solar_location,
     );
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(32);
     let (push_tx, _push_rx) = tokio::sync::broadcast::channel(64);
@@ -140,8 +148,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // Bundle the advisory comfort heat-plan config (read-only endpoint).
+    let comfort_plan = config::ComfortPlanConfig {
+        comfort: config.comfort.clone(),
+        gasheater: config.gasheater.clone(),
+        gas: config.gas.clone(),
+        rates: config.rates.clone(),
+        pool_volume_gallons: config.heating.pool.effective_volume_gallons(),
+    };
+
     // Start HTTP server
-    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, public_ip, config.web.clone());
+    let router = api::create_router(state, cmd_tx, push_tx, devices, scheduled_heat, scene_store, network_secret, public_ip, config.web.clone(), comfort_plan);
     let listener = tokio::net::TcpListener::bind(&config.bind).await?;
     let local_addr = listener.local_addr()?;
     info!("listening on {}", config.bind);

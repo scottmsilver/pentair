@@ -30,8 +30,11 @@ pub struct AppState {
     pub network_secret: String,
     pub public_ip: Option<String>,
     pub web: crate::config::WebConfig,
+    /// Config for the advisory (read-only) comfort heat-plan endpoint.
+    pub comfort_plan: crate::config::ComfortPlanConfig,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn router(
     shared: SharedState,
     cmd_tx: mpsc::Sender<AdapterCommand>,
@@ -42,6 +45,7 @@ pub fn router(
     network_secret: String,
     public_ip: Option<String>,
     web: crate::config::WebConfig,
+    comfort_plan: crate::config::ComfortPlanConfig,
 ) -> Router {
     let state = AppState {
         shared,
@@ -53,6 +57,7 @@ pub fn router(
         network_secret,
         public_ip,
         web,
+        comfort_plan,
     };
 
     Router::new()
@@ -63,6 +68,10 @@ pub fn router(
         .route("/api/approve", post(approve_redirect))
         // ── Semantic API (primary — use these) ──────────────────────
         .route("/api/pool", get(get_pool))
+        // Advisory / READ-ONLY: computes a recommended heat plan + projected
+        // savings. GET only — it never actuates, writes a setpoint, or issues a
+        // command. See `get_heat_plan`.
+        .route("/api/pool/heat-plan", get(get_heat_plan))
         .route("/api/pool/on", post(pool_on))
         .route("/api/pool/off", post(pool_off))
         .route("/api/pool/heat", post(pool_heat))
@@ -162,6 +171,163 @@ async fn get_pool(State(state): State<AppState>) -> Json<serde_json::Value> {
         }
         None => Json(serde_json::json!({"error": "pool data not yet available"})),
     }
+}
+
+// ── Advisory comfort heat-plan (READ-ONLY — never actuates) ──────────────
+//
+// This handler is PURE READ. It builds the recommended heating plan from the
+// live weather forecast + the fitted cooling params + config and returns the
+// projected energy/cost savings as JSON. It dispatches NO `AdapterCommand`,
+// POSTs nothing, writes no setpoint, and touches no heater/pump. The reserved
+// `[comfort].actuate` flag is INERT and is never consulted to take an action.
+async fn get_heat_plan(State(state): State<AppState>) -> Json<serde_json::Value> {
+    use crate::scheduler;
+
+    let cfg = &state.comfort_plan;
+
+    // Feature is OFF unless comfort windows are configured.
+    if !cfg.comfort.enabled() {
+        return Json(serde_json::json!({ "enabled": false }));
+    }
+
+    let windows = scheduler::comfort_windows_from_config(&cfg.comfort);
+    if windows.is_empty() {
+        return Json(serde_json::json!({
+            "enabled": false,
+            "reason": "no parseable comfort windows",
+        }));
+    }
+
+    // Pull the read-only model snapshot (fitted params, solar site, start temp,
+    // current weather segments) from shared state without mutating anything.
+    let (segments, params, site, start_temp, latest_obs_ms) = {
+        let s = state.shared.read().await;
+        let site = s.heat.pool_solar_site();
+        (
+            s.weather.to_segments(site),
+            s.heat.pool_cooling_params(),
+            site,
+            s.heat.pool_last_reliable_temp_f(),
+            s.weather
+                .latest_observation()
+                .map(|o| o.observed_at_unix_ms),
+        )
+    };
+    let _ = site; // site already baked into the segments; kept for clarity.
+
+    let Some(start_temp) = start_temp else {
+        return Json(serde_json::json!({
+            "enabled": true,
+            "available": false,
+            "reason": "no reliable pool temperature yet",
+        }));
+    };
+    let Some(volume_gallons) = cfg.pool_volume_gallons.filter(|v| *v > 0.0) else {
+        return Json(serde_json::json!({
+            "enabled": true,
+            "available": false,
+            "reason": "pool volume not configured (set [heating.pool])",
+        }));
+    };
+    if segments.is_empty() {
+        return Json(serde_json::json!({
+            "enabled": true,
+            "available": false,
+            "reason": "no weather forecast available yet",
+        }));
+    }
+
+    // Anchor the horizon at the latest observation (ms→s), falling back to the
+    // first segment's start. This is just a timestamp, not a clock read.
+    let anchor_unix = latest_obs_ms
+        .or_else(|| segments.first().map(|s| s.start_unix_ms))
+        .unwrap_or(0)
+        / 1000;
+
+    let heater = scheduler::GasHeaterModel::from_config(&cfg.gasheater);
+    let gas_rate = scheduler::GasRate::from_config(&cfg.gas);
+    let rates =
+        scheduler::RateSchedule::from_config(&cfg.rates, cfg.comfort.utc_offset_seconds);
+    let thermal_mass = scheduler::thermal_mass_btu_per_f(volume_gallons);
+    // Sanitize the fitted cooling params: a degenerate fit (NaN/inf) must not
+    // propagate into the advisory projection.
+    let params = scheduler::sanitize_cooling_params(&params);
+
+    // Clamp the slot length to a sane floor and the slot count to a hard ceiling
+    // so a pathological config (`slot_hours` ~ 0, huge `horizon_hours`) can't
+    // explode the grid allocation or overflow the timestamp math.
+    let slot_hours = scheduler::sanitize_slot_hours(cfg.comfort.slot_hours);
+    let num_slots = scheduler::bounded_num_slots(cfg.comfort.horizon_hours, slot_hours);
+
+    let baseline_setpoint_f = {
+        let raw = cfg.comfort.baseline_setpoint_f.unwrap_or_else(|| {
+            windows
+                .iter()
+                .map(|w| w.target_f)
+                .fold(f64::MIN, f64::max)
+                .max(0.0)
+        });
+        // A configured NaN/inf setpoint would distort baseline savings and emit
+        // misleading/null JSON; fall back to a sane hold temperature.
+        if raw.is_finite() {
+            raw
+        } else {
+            80.0
+        }
+    };
+
+    let ctx = scheduler::PlanContext {
+        grid: scheduler::SlotGrid::new(anchor_unix, slot_hours, num_slots),
+        segments: &segments,
+        params: &params,
+        heater: &heater,
+        gas_rate: &gas_rate,
+        rates: &rates,
+        thermal_mass_btu_per_f: thermal_mass,
+        start_temp,
+    };
+
+    let report = scheduler::build_report(&ctx, &windows, baseline_setpoint_f);
+
+    Json(serde_json::json!({
+        "enabled": true,
+        "available": true,
+        "advisory": true,
+        "actuates": false,
+        // Energy/cost below are MODEL-PROJECTED (simulated from the thermal model),
+        // never metered. Flagged so a client can't mistake them for real readings.
+        "energy_is_model_projected": true,
+        "anchor_unix": anchor_unix,
+        "slot_hours": slot_hours,
+        "start_temp_f": start_temp,
+        "baseline_setpoint_f": baseline_setpoint_f,
+        "schedule": report.schedule
+            .iter()
+            .map(|(unix, on)| serde_json::json!({ "unix": unix, "heat_on": on }))
+            .collect::<Vec<_>>(),
+        "trajectory": report.trajectory
+            .iter()
+            .map(|(unix, t)| serde_json::json!({ "unix": unix, "temp_f": t }))
+            .collect::<Vec<_>>(),
+        "optimizer_gas_therms": report.optimizer_gas_therms,
+        "optimizer_pump_kwh": report.optimizer_pump_kwh,
+        "optimizer_usd": report.optimizer_usd,
+        "baseline_gas_therms": report.baseline_gas_therms,
+        "baseline_pump_kwh": report.baseline_pump_kwh,
+        "baseline_usd": report.baseline_usd,
+        "savings_usd": report.savings_usd,
+        "savings_pct": report.savings_pct,
+        "comfort_met": report.comfort_met
+            .iter()
+            .map(|o| serde_json::json!({
+                "window_start_unix": o.window_start_unix,
+                "target_f": o.target_f,
+                "met": o.met,
+            }))
+            .collect::<Vec<_>>(),
+        "all_comfort_met": report.all_comfort_met(),
+        "summary": report.summary,
+    }))
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -1219,6 +1385,7 @@ mod approve_flow_tests {
             crate::config::SpaHeatNotificationsConfig::default(),
             std::path::PathBuf::from("/dev/null"),
             std::path::PathBuf::from("/dev/null"),
+            None,
         );
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(1);
         let (push_tx, _) = tokio::sync::broadcast::channel(1);
@@ -1236,6 +1403,7 @@ mod approve_flow_tests {
             "test-secret".to_string(),
             public_ip.map(|s| s.to_string()),
             web,
+            crate::config::ComfortPlanConfig::default(),
         )
     }
 
@@ -1313,6 +1481,7 @@ mod approve_flow_tests {
             crate::config::SpaHeatNotificationsConfig::default(),
             std::path::PathBuf::from("/dev/null"),
             std::path::PathBuf::from("/dev/null"),
+            None,
         );
         let (cmd_tx, _) = tokio::sync::mpsc::channel(1);
         let (push_tx, _) = tokio::sync::broadcast::channel(1);
@@ -1328,6 +1497,7 @@ mod approve_flow_tests {
         let app = router(
             shared, cmd_tx, push_tx, devices, scheduled_heat, scenes,
             "test-secret".to_string(), Some("1.2.3.4".to_string()), web,
+            crate::config::ComfortPlanConfig::default(),
         );
         let body = approve_form_body("user@test.com");
         let req = Request::post("/api/approve")
