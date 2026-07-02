@@ -367,6 +367,9 @@ pub struct HeatingConfig {
     /// Covered-when-idle cooling model for the temperature predictor.
     #[serde(default)]
     pub cooling: CoolingConfig,
+    /// Continuous thermal calibrator (advisory; spec §12).
+    #[serde(default)]
+    pub calibration: CalibrationConfig,
 }
 
 /// Cooling-model configuration for the pool-temperature predictor.
@@ -417,6 +420,91 @@ fn default_max_projection_hours() -> f64 {
 
 fn default_cover_solar_transmission() -> f64 {
     0.75
+}
+
+/// `[heating.calibration]` — continuous thermal calibrator (spec
+/// docs/2026-07-01-thermal-calibrator-v1.md §12). Advisory only; nothing here
+/// actuates.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CalibrationConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Rolling fit window (days of stored cooling intervals).
+    #[serde(default = "default_calibration_window_days")]
+    pub window_days: f64,
+    /// Re-fit trigger: at least this many fresh intervals since the last fit.
+    #[serde(default = "default_min_new_intervals")]
+    pub min_new_intervals: usize,
+    /// Re-fit rate limit: at most one fit per body per this many hours.
+    #[serde(default = "default_refit_min_hours")]
+    pub refit_min_hours: f64,
+    /// Damping alpha for accepted fits: new = (1-a)*old + a*fit.
+    #[serde(default = "default_damping_alpha")]
+    pub damping_alpha: f64,
+    /// Accept tolerance (°F) on the same-holdout MAE comparison.
+    #[serde(default = "default_accept_tolerance_f")]
+    pub accept_tolerance_f: f64,
+    /// Re-fit trigger: rolling prediction MAE above this (°F) forces a fit.
+    #[serde(default = "default_mae_drift_f")]
+    pub mae_drift_f: f64,
+    /// Exclusion-deadlock escape hatch (spec §9): trip when the exclusion rate
+    /// over `exclusion_window_days` exceeds this fraction.
+    #[serde(default = "default_exclusion_rate_threshold")]
+    pub exclusion_rate_threshold: f64,
+    #[serde(default = "default_exclusion_window_days")]
+    pub exclusion_window_days: f64,
+    /// Outlet-offset learning: a settled read must land within this many hours
+    /// of a completed heating session to pair with it.
+    #[serde(default = "default_offset_settle_window_hours")]
+    pub offset_settle_window_hours: f64,
+}
+
+impl Default for CalibrationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window_days: default_calibration_window_days(),
+            min_new_intervals: default_min_new_intervals(),
+            refit_min_hours: default_refit_min_hours(),
+            damping_alpha: default_damping_alpha(),
+            accept_tolerance_f: default_accept_tolerance_f(),
+            mae_drift_f: default_mae_drift_f(),
+            exclusion_rate_threshold: default_exclusion_rate_threshold(),
+            exclusion_window_days: default_exclusion_window_days(),
+            offset_settle_window_hours: default_offset_settle_window_hours(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_calibration_window_days() -> f64 {
+    14.0
+}
+fn default_min_new_intervals() -> usize {
+    4
+}
+fn default_refit_min_hours() -> f64 {
+    24.0
+}
+fn default_damping_alpha() -> f64 {
+    0.3
+}
+fn default_accept_tolerance_f() -> f64 {
+    0.15
+}
+fn default_mae_drift_f() -> f64 {
+    1.5
+}
+fn default_exclusion_rate_threshold() -> f64 {
+    0.5
+}
+fn default_exclusion_window_days() -> f64 {
+    5.0
+}
+fn default_offset_settle_window_hours() -> f64 {
+    6.0
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -535,6 +623,7 @@ impl Default for HeatingConfig {
             pool: Default::default(),
             spa: Default::default(),
             cooling: Default::default(),
+            calibration: Default::default(),
         }
     }
 }
@@ -801,5 +890,30 @@ mod config_tests {
         assert_eq!(config.web.firebase.api_key, "test-key");
         assert_eq!(config.web.firebase.auth_domain, "test.firebaseapp.com");
         assert_eq!(config.web.firebase.project_id, "test-project");
+    }
+
+    #[test]
+    fn calibration_config_defaults_and_parse() {
+        // Absent section -> defaults.
+        let config: Config = toml::from_str("adapter_host = \"h\"").expect("parse");
+        let cal = &config.heating.calibration;
+        assert!(cal.enabled);
+        assert_eq!(cal.window_days, 14.0);
+        assert_eq!(cal.min_new_intervals, 4);
+        assert_eq!(cal.refit_min_hours, 24.0);
+        assert_eq!(cal.damping_alpha, 0.3);
+        assert_eq!(cal.accept_tolerance_f, 0.15);
+        assert_eq!(cal.mae_drift_f, 1.5);
+        assert_eq!(cal.exclusion_rate_threshold, 0.5);
+        assert_eq!(cal.exclusion_window_days, 5.0);
+        assert_eq!(cal.offset_settle_window_hours, 6.0);
+
+        // Explicit section overrides.
+        let config: Config = toml::from_str(
+            "adapter_host = \"h\"\n[heating.calibration]\nenabled = false\nwindow_days = 7.0\n",
+        )
+        .expect("parse");
+        assert!(!config.heating.calibration.enabled);
+        assert_eq!(config.heating.calibration.window_days, 7.0);
     }
 }
