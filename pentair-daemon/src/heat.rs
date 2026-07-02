@@ -14,7 +14,7 @@ use pentair_protocol::semantic::{
 use pentair_protocol::types::SLDateTime;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const WATER_LB_PER_GALLON: f64 = 8.34;
 const MAX_RECENT_SESSIONS: usize = 24;
@@ -1437,6 +1437,89 @@ impl HeatEstimator {
         }
     }
 
+    /// The slow re-fit loop (spec §4.2, §6, §7): gated, holdout-validated,
+    /// damped, and SILENT (store-only; tracing debug; no event-log anywhere).
+    fn maybe_refit(&mut self, body: HeatingBodyKind, now_unix_ms: i64) {
+        let cal = self.config.calibration.clone();
+        if !cal.enabled {
+            return;
+        }
+        let last_refit = match body {
+            HeatingBodyKind::Pool => self.store.pool_last_refit_unix_ms,
+            HeatingBodyKind::Spa => self.store.spa_last_refit_unix_ms,
+        };
+        let min_gap_ms = (cal.refit_min_hours * 3_600_000.0) as i64;
+        if let Some(last) = last_refit {
+            if now_unix_ms - last < min_gap_ms {
+                return;
+            }
+        }
+        let window_start = now_unix_ms - (cal.window_days * 24.0 * 3_600_000.0) as i64;
+        let since_fit = last_refit.unwrap_or(i64::MIN);
+        let intervals = self.intervals(body);
+        let fresh_clean = intervals
+            .iter()
+            .filter(|i| {
+                i.t1_unix_ms > since_fit
+                    && i.regime == crate::calibrator::IntervalRegime::IdleCovered
+            })
+            .count();
+        let mae_drifted = self.prediction_mae(body).is_some_and(|m| m > cal.mae_drift_f);
+        if fresh_clean < cal.min_new_intervals && !mae_drifted {
+            return;
+        }
+
+        // Escape hatch (spec §9): a persistently-high exclusion rate means the
+        // model, not the water, is wrong — fit over EVERYTHING in the window.
+        let exclusion_window_start =
+            now_unix_ms - (cal.exclusion_window_days * 24.0 * 3_600_000.0) as i64;
+        let escape = crate::calibrator::exclusion_rate(intervals, exclusion_window_start)
+            > cal.exclusion_rate_threshold;
+        let window: Vec<crate::calibrator::CoolingInterval> = intervals
+            .iter()
+            .filter(|i| {
+                i.t1_unix_ms >= window_start
+                    && (escape || i.regime == crate::calibrator::IntervalRegime::IdleCovered)
+            })
+            .cloned()
+            .collect();
+        if window.len() < 3 {
+            return; // holdout_split needs both halves populated
+        }
+
+        let site = self.solar_site();
+        let current = self.cooling_params(body);
+        let (fit_set, holdout) = crate::calibrator::holdout_split(&window);
+        let candidate = crate::calibrator::fit_intervals(&fit_set, &current, site);
+        let accepted = crate::calibrator::evaluate_candidate(
+            &current, &candidate, &holdout, site, cal.damping_alpha, cal.accept_tolerance_f,
+        );
+        match accepted {
+            Some(blend) => {
+                debug!(?body, tau_hours = 1.0 / blend.k0_per_hour, escape,
+                    "calibrator: refit accepted (silent auto-apply)");
+                *self.cooling_params_slot_mut(body) = Some(blend);
+            }
+            None => {
+                debug!(?body, escape, "calibrator: refit rejected, keeping current");
+            }
+        }
+
+        // Bookkeeping either way: rate-limit stamp + MAE trend point.
+        match body {
+            HeatingBodyKind::Pool => self.store.pool_last_refit_unix_ms = Some(now_unix_ms),
+            HeatingBodyKind::Spa => self.store.spa_last_refit_unix_ms = Some(now_unix_ms),
+        }
+        if let Some(mae) = self.prediction_mae(body) {
+            self.store.mae_history.push(MaePoint { body, at_unix_ms: now_unix_ms, mae_f: mae });
+            let len = self.store.mae_history.len();
+            if len > MAX_MAE_POINTS {
+                self.store.mae_history.drain(..len - MAX_MAE_POINTS);
+            }
+        }
+        self.persist();
+    }
+
     /// True when any recorded pump/body activity window for `body` overlaps the
     /// open gap. Complements `heating_overlapped_gap` (heater sessions) so a
     /// cooling interval is idle across its WHOLE span (spec §3).
@@ -1554,6 +1637,9 @@ impl HeatEstimator {
                 now_unix_ms,
             );
         }
+
+        self.maybe_refit(HeatingBodyKind::Pool, now_unix_ms);
+        self.maybe_refit(HeatingBodyKind::Spa, now_unix_ms);
     }
 
     fn calibrate_body(
@@ -3248,5 +3334,87 @@ mod tests {
             HeatingBodyKind::Spa, last.end_unix_ms + 10, last.end_unix_ms + 20));
         assert!(!estimator.activity_overlapped_gap(
             HeatingBodyKind::Pool, last.start_unix_ms - 10, last.end_unix_ms + 10));
+    }
+
+    /// Fill the estimator with synthetic idle intervals generated from `truth`.
+    fn seed_synthetic_intervals(
+        estimator: &mut HeatEstimator,
+        body: HeatingBodyKind,
+        truth: &CoolingParams,
+        count: usize,
+    ) {
+        for i in 0..count {
+            let t0 = i as i64 * 12 * 3_600_000;
+            let t1 = t0 + 10 * 3_600_000;
+            let segs = vec![test_weather_segment(t0, t1, 60.0)];
+            let weather = crate::calibrator::bucket_weather(&segs, t0, t1);
+            let mut interval = crate::calibrator::CoolingInterval {
+                t0_unix_ms: t0, t1_unix_ms: t1, temp0_f: 95.0, temp1_f: 0.0,
+                regime: crate::calibrator::IntervalRegime::IdleCovered, weather,
+            };
+            interval.temp1_f = crate::calibrator::predict_interval_end(
+                &interval, truth, thermal::SolarSite::disabled());
+            estimator.intervals_slot_mut(body).push(interval);
+        }
+    }
+
+    #[test]
+    fn refit_applies_validated_blend_silently() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        // Current params badly wrong.
+        *estimator.cooling_params_slot_mut(HeatingBodyKind::Spa) =
+            Some(CoolingParams { k0_per_hour: 1.0 / 30.0, ..CoolingParams::seed() });
+        // Adaptation: mae_history is only appended when a rolling prediction
+        // MAE is already known (spec §10: it mirrors the closed-loop EWMA
+        // trend), which a brand-new estimator doesn't have yet. Seed one so
+        // the "mae_history recorded on accept" assertion below is meaningful.
+        *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(2.5);
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 8);
+        // Adaptation: shortly after the last seeded interval (t1 ~= 94h), not
+        // the brief's `100 * 12h` (~50 days) — with the real default
+        // `window_days` (14), that would place every synthetic interval
+        // outside the rolling fit window and the refit would no-op.
+        let now = 9 * 12 * 3_600_000;
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        let after = estimator.cooling_params(HeatingBodyKind::Spa);
+        // Moved toward truth (damped: between old 1/30 and truth 1/96).
+        assert!(after.k0_per_hour < 1.0 / 30.0);
+        assert!(after.k0_per_hour > 1.0 / 96.0);
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, Some(now));
+        assert!(!estimator.store.mae_history.is_empty());
+    }
+
+    #[test]
+    fn refit_rate_limited_by_refit_min_hours() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 8);
+        let now = 100 * 12 * 3_600_000;
+        estimator.store.spa_last_refit_unix_ms = Some(now - 3_600_000); // 1h ago < 24h
+        let before = estimator.cooling_params(HeatingBodyKind::Spa);
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert_eq!(estimator.cooling_params(HeatingBodyKind::Spa), before);
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, Some(now - 3_600_000));
+    }
+
+    #[test]
+    fn refit_needs_min_new_intervals_unless_mae_drifts() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 2); // < 4
+        // Adaptation: same reasoning as `refit_applies_validated_blend_silently`
+        // — keep `now` within the rolling `window_days` window of the seeded
+        // synthetic intervals (max t1 ~= 46h after the second seeding below).
+        let now = 5 * 12 * 3_600_000;
+        let before = estimator.cooling_params(HeatingBodyKind::Spa);
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert_eq!(estimator.cooling_params(HeatingBodyKind::Spa), before, "too few intervals, no drift");
+        // Drifted MAE forces the fit even with few intervals... but the accept
+        // gate needs a holdout, so seed enough for a split first.
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 4);
+        *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(5.0); // > mae_drift_f
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert!(estimator.store.spa_last_refit_unix_ms.is_some(), "drift trigger fired");
     }
 }
