@@ -1657,6 +1657,11 @@ impl HeatEstimator {
         {
             return;
         }
+        // A fresh settled read may be the post-mix truth for a just-finished
+        // heating session — learn the outlet offset + bulk rate (spec §8).
+        // This must run before the anchor/gap early-returns below: a settled
+        // read minutes after a session ends must still pair with it.
+        self.learn_outlet_offset(body, telemetry.temperature_f, now_unix_ms);
         let Some(anchor_obs) = self.last_reliable_temperature(body) else {
             return;
         };
@@ -1859,6 +1864,74 @@ impl HeatEstimator {
             Some(existing) => existing * 0.7 + observed_rate_f_per_hour * 0.3,
             None => observed_rate_f_per_hour,
         });
+    }
+
+    /// Learn the heater-return sensor's outlet-vs-bulk offset and the true BULK
+    /// heating rate from the first settled read after a completed session
+    /// (spec §8): during firing the sensor reads ~6-10F above the mixed bulk,
+    /// so the session's end reading is outlet-biased; the settled read is truth.
+    fn learn_outlet_offset(&mut self, body: HeatingBodyKind, settled_bulk_f: f64, now_unix_ms: i64) {
+        if !self.config.calibration.enabled {
+            return;
+        }
+        let window_ms = (self.config.calibration.offset_settle_window_hours * 3_600_000.0) as i64;
+        let done_slot_value = match body {
+            HeatingBodyKind::Pool => self.store.pool_offset_done_session_end_ms,
+            HeatingBodyKind::Spa => self.store.spa_offset_done_session_end_ms,
+        };
+        let Some(session) = self
+            .store
+            .recent_sessions
+            .iter()
+            .filter(|s| {
+                s.body == body
+                    && s.ended_at_unix_ms <= now_unix_ms
+                    && now_unix_ms - s.ended_at_unix_ms <= window_ms
+            })
+            .max_by_key(|s| s.ended_at_unix_ms)
+            .cloned()
+        else {
+            return;
+        };
+        if done_slot_value == Some(session.ended_at_unix_ms) {
+            return; // this session already produced its one offset sample
+        }
+        let heating_hours =
+            (session.ended_at_unix_ms - session.started_at_unix_ms) as f64 / 3_600_000.0;
+        if heating_hours <= 0.0 {
+            return;
+        }
+        let offset = session.end_temp_f - settled_bulk_f;
+        let bulk_rate = (settled_bulk_f - session.start_temp_f) / heating_hours;
+        if !offset.is_finite() || !bulk_rate.is_finite() {
+            return;
+        }
+        if !(-5.0..=20.0).contains(&offset) || !(0.0..=60.0).contains(&bulk_rate) || bulk_rate == 0.0 {
+            return; // implausible pairing — skip rather than poison the EWMA
+        }
+        const EWMA_ALPHA: f64 = 0.3;
+        let (offset_slot, rate_slot, done_slot) = match body {
+            HeatingBodyKind::Pool => (
+                &mut self.store.pool_outlet_offset_f,
+                &mut self.store.pool_bulk_rate_f_per_hour,
+                &mut self.store.pool_offset_done_session_end_ms,
+            ),
+            HeatingBodyKind::Spa => (
+                &mut self.store.spa_outlet_offset_f,
+                &mut self.store.spa_bulk_rate_f_per_hour,
+                &mut self.store.spa_offset_done_session_end_ms,
+            ),
+        };
+        *offset_slot = Some(match *offset_slot {
+            Some(prev) => prev * (1.0 - EWMA_ALPHA) + offset * EWMA_ALPHA,
+            None => offset,
+        });
+        *rate_slot = Some(match *rate_slot {
+            Some(prev) => prev * (1.0 - EWMA_ALPHA) + bulk_rate * EWMA_ALPHA,
+            None => bulk_rate,
+        });
+        *done_slot = Some(session.ended_at_unix_ms);
+        self.persist();
     }
 
     fn persist(&self) {
@@ -3419,5 +3492,52 @@ mod tests {
         *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(5.0); // > mae_drift_f
         estimator.maybe_refit(HeatingBodyKind::Spa, now);
         assert!(estimator.store.spa_last_refit_unix_ms.is_some(), "drift trigger fired");
+    }
+
+    fn test_completed_session(
+        body: HeatingBodyKind,
+        started_at_unix_ms: i64,
+        ended_at_unix_ms: i64,
+        start_temp_f: f64,
+        end_temp_f: f64,
+    ) -> CompletedHeatingSession {
+        CompletedHeatingSession {
+            body,
+            started_at_unix_ms,
+            ended_at_unix_ms,
+            start_temp_f,
+            end_temp_f,
+            target_temp_f: end_temp_f,
+            average_air_temp_f: None,
+            duration_minutes: (ended_at_unix_ms - started_at_unix_ms) as f64 / 60_000.0,
+            average_rate_f_per_hour: 0.0,
+        }
+    }
+
+    #[test]
+    fn outlet_offset_and_bulk_rate_learned_from_settled_post_heat_read() {
+        let mut estimator = test_estimator();
+        // 30-min spa session: 91F -> outlet said 104F at cutoff.
+        estimator.store.recent_sessions.push(test_completed_session(
+            HeatingBodyKind::Spa, 0, 30 * 60_000, 91.0, 104.0));
+        // Settled mixed read 20 min later: true bulk 94F.
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 94.0, 50 * 60_000);
+        let offset = estimator.store.spa_outlet_offset_f.expect("offset learned");
+        assert!((offset - 10.0).abs() < 1e-9); // 104 - 94
+        let rate = estimator.store.spa_bulk_rate_f_per_hour.expect("bulk rate learned");
+        assert!((rate - 6.0).abs() < 1e-9); // (94 - 91) / 0.5h
+        // Second call for the same session is a no-op (already paired).
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 93.0, 60 * 60_000);
+        assert!((estimator.store.spa_outlet_offset_f.unwrap() - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn outlet_offset_ignores_reads_outside_settle_window() {
+        let mut estimator = test_estimator();
+        estimator.store.recent_sessions.push(test_completed_session(
+            HeatingBodyKind::Spa, 0, 30 * 60_000, 91.0, 104.0));
+        // 10 hours later (> 6h window): stale, don't pair.
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 92.0, 10 * 3_600_000);
+        assert!(estimator.store.spa_outlet_offset_f.is_none());
     }
 }
