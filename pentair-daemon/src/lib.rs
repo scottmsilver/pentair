@@ -17,5 +17,6 @@
 pub mod config;
 pub mod scenes;
 pub mod scheduler;
+pub mod calibrator;
 pub mod thermal;
 pub mod weather;

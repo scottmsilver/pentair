@@ -8,6 +8,7 @@ mod heat;
 mod network_secret;
 mod scheduled_heat;
 mod scheduler;
+mod calibrator;
 mod scenes;
 mod spa_notifications;
 mod state;
