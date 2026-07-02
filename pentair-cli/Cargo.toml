@@ -6,6 +6,9 @@ edition = "2021"
 [dependencies]
 pentair-protocol = { path = "../pentair-protocol" }
 pentair-client = { path = "../pentair-client" }
+# Pure model reuse: the advisory comfort scheduler + backtest harness live in
+# pentair-daemon's library surface (computation only — never actuates).
+pentair-daemon = { path = "../pentair-daemon" }
 clap = { version = "4", features = ["derive", "env"] }
 thiserror = { workspace = true }
 serde = { workspace = true }

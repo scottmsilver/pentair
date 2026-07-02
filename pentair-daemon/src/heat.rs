@@ -3,6 +3,8 @@ use crate::spa_notifications::{
     evaluate_spa_heat_notifications, SpaHeatNotificationEvent, SpaHeatNotificationInput,
     SpaHeatNotificationState,
 };
+use crate::thermal::{self, CoolingParams, PredictionBasis, ReliableSample, WeatherSegment};
+use crate::weather::WeatherCache;
 use chrono::{NaiveDate, NaiveDateTime};
 use pentair_protocol::responses::{HistoryData, TimeRangePoint};
 use pentair_protocol::semantic::{
@@ -12,12 +14,51 @@ use pentair_protocol::semantic::{
 use pentair_protocol::types::SLDateTime;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 const WATER_LB_PER_GALLON: f64 = 8.34;
 const MAX_RECENT_SESSIONS: usize = 24;
 const AMBIENT_RATE_WEIGHT_SPAN_F: f64 = 10.0;
 const LAST_RELIABLE_PERSIST_INTERVAL_MS: i64 = 60_000;
+
+/// Smallest sensing gap worth using for a closed-loop calibration step (ms).
+/// Below this the prediction and the fresh reading are effectively identical.
+const MIN_CALIBRATION_GAP_MS: i64 = 30 * 60_000;
+/// EWMA weight for the rolling prediction MAE and the k0 calibration nudge.
+const PREDICTION_MAE_ALPHA: f64 = 0.3;
+const CALIBRATION_LEARNING_RATE: f64 = 0.3;
+/// Sanity bounds on the relaxation time constant (hours), mirroring thermal.rs.
+const TAU_MIN_HOURS: f64 = 2.0;
+const TAU_MAX_HOURS: f64 = 200.0;
+/// Multiplier turning the persisted rolling MAE (°F) into an uncertainty floor:
+/// the surfaced ± band is `max(gap-heuristic, MAE_UNCERTAINTY_K * MAE)`.
+const MAE_UNCERTAINTY_K: f64 = 1.5;
+/// Above this rolling MAE (°F) the prediction confidence is dropped one tier.
+const MAE_CONFIDENCE_DOWNGRADE_F: f64 = 2.0;
+/// A projection's weather is "fresh" only if the newest observed sample is no
+/// older than this. Beyond it we fall back to the controller-air cooling-only
+/// tier (or to none/measured when no air temperature is available either).
+const WEATHER_FRESHNESS_MS: i64 = 2 * 3_600_000;
+/// Below this |∂pred/∂k0| the closed-loop secant step is ill-conditioned (the
+/// reading barely constrains k0); skip the step rather than divide by ~0.
+const K0_SENSITIVITY_FLOOR: f64 = 1.0e-3;
+/// Cap a single secant step to this fraction of the current k0, so one noisy
+/// reading can never swing the cooling constant hard.
+const K0_MAX_STEP_FRACTION: f64 = 0.25;
+/// Floor on the per-step k0 cap, so the step never collapses to zero when k0 is
+/// already tiny.
+const MIN_K0_STEP: f64 = 1.0e-6;
+/// Hard cap on stored calibrator cooling intervals per body (spec-driven; see
+/// `crate::calibrator`), so the store stays bounded on long-running installs.
+const MAX_INTERVALS_PER_BODY: usize = 200;
+/// Residual beyond ANOMALY_SIGMA * max(rolling MAE, floor) tags the interval
+/// ExcludedAnomalous (spec §3 uncovered/in-use heuristic).
+const ANOMALY_SIGMA: f64 = 3.0;
+const ANOMALY_MAE_FLOOR_F: f64 = 0.75;
+/// Hard cap on stored body-activity windows (pump/body on->off transitions).
+const MAX_ACTIVITY_WINDOWS: usize = 200;
+/// Hard cap on stored rolling-MAE history points.
+const MAX_MAE_POINTS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum HeatingBodyKind {
@@ -49,6 +90,24 @@ struct TemperatureTrust {
 struct ReliableTemperatureObservation {
     temperature: i32,
     observed_at_unix_ms: i64,
+}
+
+/// A recorded pump/body activity span (on -> off), used by the calibrator to
+/// reject cooling intervals that weren't idle across their whole span.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct ActivityWindow {
+    body: HeatingBodyKind,
+    start_unix_ms: i64,
+    end_unix_ms: i64,
+}
+
+/// One rolling-MAE sample, kept for trend/debugging visibility alongside the
+/// scalar `*_prediction_mae_f` EWMA.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct MaePoint {
+    body: HeatingBodyKind,
+    at_unix_ms: i64,
+    mae_f: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,6 +228,45 @@ struct HeatEstimatorStore {
     pool_last_reliable_temperature: Option<ReliableTemperatureObservation>,
     spa_last_reliable_temperature: Option<ReliableTemperatureObservation>,
     recent_sessions: Vec<CompletedHeatingSession>,
+    /// Fitted covered-idle cooling constants (history seed, refined closed-loop).
+    #[serde(default)]
+    pool_cooling_params: Option<CoolingParams>,
+    #[serde(default)]
+    spa_cooling_params: Option<CoolingParams>,
+    /// Rolling mean-absolute prediction error (°F) from closed-loop calibration.
+    #[serde(default)]
+    pool_prediction_mae_f: Option<f64>,
+    #[serde(default)]
+    spa_prediction_mae_f: Option<f64>,
+    /// Captured cooling intervals (spec: continuous thermal calibrator) feeding
+    /// the closed-loop cooling-params fit. Bounded to `MAX_INTERVALS_PER_BODY`.
+    #[serde(default)]
+    pool_cooling_intervals: Vec<crate::calibrator::CoolingInterval>,
+    #[serde(default)]
+    spa_cooling_intervals: Vec<crate::calibrator::CoolingInterval>,
+    /// Pump/body on->off activity spans, used to reject cooling intervals that
+    /// weren't idle across their whole span. Bounded to `MAX_ACTIVITY_WINDOWS`.
+    #[serde(default)]
+    activity_windows: Vec<ActivityWindow>,
+    /// Rolling-MAE history points, bounded to `MAX_MAE_POINTS`.
+    #[serde(default)]
+    mae_history: Vec<MaePoint>,
+    #[serde(default)]
+    pool_outlet_offset_f: Option<f64>,
+    #[serde(default)]
+    spa_outlet_offset_f: Option<f64>,
+    #[serde(default)]
+    pool_bulk_rate_f_per_hour: Option<f64>,
+    #[serde(default)]
+    spa_bulk_rate_f_per_hour: Option<f64>,
+    #[serde(default)]
+    pool_last_refit_unix_ms: Option<i64>,
+    #[serde(default)]
+    spa_last_refit_unix_ms: Option<i64>,
+    #[serde(default)]
+    pool_offset_done_session_end_ms: Option<i64>,
+    #[serde(default)]
+    spa_offset_done_session_end_ms: Option<i64>,
 }
 
 impl HeatEstimatorStore {
@@ -211,12 +309,121 @@ pub struct HeatEstimator {
     spa_active_since_unix_ms: Option<i64>,
     pool_last_active_observed: Option<bool>,
     spa_last_active_observed: Option<bool>,
+    /// Site location for the solar-gain term. `None` until configured, in which
+    /// case the solar term is disabled (segments relax toward plain air temp).
+    solar_location: Option<(f64, f64)>,
+}
+
+/// Upper sanity bound on persisted epoch-ms timestamps (year 2100). A
+/// hand-edited or corrupted store can contain arbitrary values; anything
+/// outside `(0, MAX_SANE_UNIX_MS)` is treated as garbage rather than fed into
+/// ms/hour arithmetic that can overflow.
+const MAX_SANE_UNIX_MS: i64 = 4_102_444_800_000;
+
+/// Re-enforce the same caps + sanity bounds on a freshly-deserialized store
+/// that the daemon's own write paths already enforce at runtime. `serde` only
+/// validates shape, not size or content, so a hand-edited or otherwise
+/// corrupted `heat-estimator.json` can otherwise carry unbounded vectors or
+/// extreme timestamps straight past every in-memory cap. Called once,
+/// immediately after a successful deserialize, before the store is used.
+fn sanitize_store(store: &mut HeatEstimatorStore) {
+    let sane_ts = |ms: i64| ms > 0 && ms < MAX_SANE_UNIX_MS;
+
+    let mut dropped_intervals = 0usize;
+    let mut truncated_weather = 0usize;
+    for intervals in [
+        &mut store.pool_cooling_intervals,
+        &mut store.spa_cooling_intervals,
+    ] {
+        let before = intervals.len();
+        intervals.retain_mut(|interval| {
+            let ok = interval.temp0_f.is_finite()
+                && interval.temp1_f.is_finite()
+                && interval.t1_unix_ms > interval.t0_unix_ms
+                && sane_ts(interval.t0_unix_ms)
+                && sane_ts(interval.t1_unix_ms)
+                // Bucket timestamps feed ms/hour arithmetic during refit
+                // (predict_interval_end); a hand-edited store with sane
+                // interval endpoints but wild bucket times could still
+                // overflow it, so require every bucket to sit inside the
+                // interval and be well-ordered.
+                && interval.weather.iter().all(|b| {
+                    b.end_unix_ms > b.start_unix_ms
+                        && b.start_unix_ms >= interval.t0_unix_ms
+                        && b.end_unix_ms <= interval.t1_unix_ms
+                        && b.air_temp_f.is_finite()
+                });
+            if ok && interval.weather.len() > crate::calibrator::MAX_BUCKETS_PER_INTERVAL {
+                interval
+                    .weather
+                    .truncate(crate::calibrator::MAX_BUCKETS_PER_INTERVAL);
+                truncated_weather += 1;
+            }
+            ok
+        });
+        let len = intervals.len();
+        if len > MAX_INTERVALS_PER_BODY {
+            intervals.drain(..len - MAX_INTERVALS_PER_BODY);
+        }
+        dropped_intervals += before - intervals.len();
+    }
+
+    let before = store.activity_windows.len();
+    store
+        .activity_windows
+        .retain(|w| sane_ts(w.start_unix_ms) && sane_ts(w.end_unix_ms));
+    let len = store.activity_windows.len();
+    if len > MAX_ACTIVITY_WINDOWS {
+        store.activity_windows.drain(..len - MAX_ACTIVITY_WINDOWS);
+    }
+    let dropped_windows = before - store.activity_windows.len();
+
+    let before = store.mae_history.len();
+    store
+        .mae_history
+        .retain(|p| sane_ts(p.at_unix_ms) && p.mae_f.is_finite());
+    let len = store.mae_history.len();
+    if len > MAX_MAE_POINTS {
+        store.mae_history.drain(..len - MAX_MAE_POINTS);
+    }
+    let dropped_mae = before - store.mae_history.len();
+
+    if dropped_intervals > 0 || truncated_weather > 0 || dropped_windows > 0 || dropped_mae > 0 {
+        warn!(
+            dropped_intervals,
+            truncated_weather,
+            dropped_windows,
+            dropped_mae,
+            "heat estimator: sanitized malformed persisted store (hand-edited or corrupted \
+             heat-estimator.json?)"
+        );
+    }
 }
 
 impl HeatEstimator {
     #[cfg(test)]
     pub fn load(config: HeatingConfig, path: PathBuf) -> Self {
         Self::load_with_notifications(config, SpaHeatNotificationsConfig::default(), path)
+    }
+
+    /// Test-only helper: drives `update_active_since_for_body` with a minimal
+    /// synthetic telemetry sample at a caller-supplied clock, so activity-window
+    /// recording can be exercised without a full `PoolSystem`.
+    #[cfg(test)]
+    fn test_note_activity(&mut self, body: HeatingBodyKind, active: bool, now_unix_ms: i64) {
+        let telemetry = BodyTelemetry {
+            on: active,
+            active,
+            pool_spa_shared_pump: true,
+            temperature: 80,
+            setpoint: 80,
+            temperature_f: 80.0,
+            setpoint_f: 80.0,
+            heat_mode: "off".to_string(),
+            heating: "off".to_string(),
+            air_temp_f: None,
+        };
+        self.update_active_since_for_body(body, Some(&telemetry), now_unix_ms);
     }
 
     pub fn load_with_notifications(
@@ -233,6 +440,7 @@ impl HeatEstimator {
             HeatEstimatorStore::default()
         };
         let mut store = store;
+        sanitize_store(&mut store);
         store.seed_last_reliable_from_recent_sessions();
 
         info!(
@@ -253,7 +461,54 @@ impl HeatEstimator {
             spa_active_since_unix_ms: None,
             pool_last_active_observed: None,
             spa_last_active_observed: None,
+            solar_location: None,
         }
+    }
+
+    /// Configure the site location used by the solar-gain term. Passing `None`
+    /// (or never calling this) leaves the solar term disabled.
+    pub fn set_solar_location(&mut self, location: Option<(f64, f64)>) {
+        self.solar_location = location;
+    }
+
+    /// The solar-site parameters for this estimator: the configured location
+    /// plus the cover transmission seed, or [`SolarSite::disabled`] when no
+    /// location is configured.
+    fn solar_site(&self) -> thermal::SolarSite {
+        match self.solar_location {
+            Some((lat, lon)) => thermal::SolarSite {
+                latitude_deg: lat,
+                longitude_deg: lon,
+                cover_solar_transmission: self
+                    .config
+                    .cooling
+                    .cover_solar_transmission
+                    .clamp(0.0, 1.0),
+            },
+            None => thermal::SolarSite::disabled(),
+        }
+    }
+
+    /// Effective (fitted-or-seeded) covered-idle cooling params for the **pool**.
+    /// Read-only accessor used by the advisory comfort scheduler — exposes the
+    /// same `(k, g, evap)` the temperature predictor uses, so the plan projects
+    /// passive physics consistently. Does not actuate or mutate anything.
+    pub fn pool_cooling_params(&self) -> CoolingParams {
+        self.cooling_params(HeatingBodyKind::Pool)
+    }
+
+    /// The solar-site parameters (location + cover transmission) used to build
+    /// weather segments for the pool. Read-only accessor for the comfort
+    /// scheduler. Returns [`thermal::SolarSite::disabled`] when no location set.
+    pub fn pool_solar_site(&self) -> thermal::SolarSite {
+        self.solar_site()
+    }
+
+    /// The last reliable pool water temperature (°F), if one is known. Read-only
+    /// accessor used as the comfort scheduler's starting water temperature.
+    pub fn pool_last_reliable_temp_f(&self) -> Option<f64> {
+        self.last_reliable_temperature(HeatingBodyKind::Pool)
+            .map(|obs| obs.temperature as f64)
     }
 
     pub fn update(&mut self, system: &PoolSystem) {
@@ -333,7 +588,130 @@ impl HeatEstimator {
         }
     }
 
-    pub fn apply_to_system(&self, system: &mut PoolSystem) {
+    /// Weak prior: seed the covered-idle cooling constant from the controller's
+    /// 48h history (heater-OFF cooling intervals only), using no extra controller
+    /// round-trips. Only fills an empty slot — closed-loop calibration is primary
+    /// and must not be overwritten by the history fit. Cooling-only Newtonian fit
+    /// is scale-free in `k`, so controller display units need no conversion.
+    pub fn seed_cooling_params_from_history(
+        &mut self,
+        history: &HistoryData,
+        controller_now: &SLDateTime,
+        now_unix_ms: i64,
+        pool_spa_shared_pump: bool,
+    ) {
+        let Ok(controller_now_naive) = sl_to_naive(controller_now) else {
+            warn!("failed to parse controller time for cooling-param seed");
+            return;
+        };
+
+        let mut changed = false;
+        for body in [HeatingBodyKind::Pool, HeatingBodyKind::Spa] {
+            if self.cooling_params_slot_mut(body).is_some() {
+                continue; // never override a learned/closed-loop fit
+            }
+            if let Some(params) = self.fit_history_cooling(
+                body,
+                history,
+                &controller_now_naive,
+                now_unix_ms,
+                pool_spa_shared_pump,
+            ) {
+                *self.cooling_params_slot_mut(body) = Some(params);
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.persist();
+        }
+    }
+
+    fn fit_history_cooling(
+        &self,
+        body: HeatingBodyKind,
+        history: &HistoryData,
+        controller_now: &NaiveDateTime,
+        now_unix_ms: i64,
+        pool_spa_shared_pump: bool,
+    ) -> Option<CoolingParams> {
+        let observations = reliable_history_observations_for_body(
+            body,
+            history,
+            controller_now,
+            now_unix_ms,
+            pool_spa_shared_pump,
+            self.config.shared_equipment_temp_warmup_seconds,
+        );
+
+        // Keep only heater-OFF samples: cooling intervals. Heater-ON subsegments
+        // are governed by the rate model, never the cooling model.
+        let cooling_samples: Vec<ReliableSample> = observations
+            .into_iter()
+            .filter(|observation| {
+                !history.heater_runs.iter().any(|run| {
+                    history_run_contains_sample(
+                        run,
+                        controller_now,
+                        now_unix_ms,
+                        observation.observed_at_unix_ms,
+                        0,
+                    )
+                })
+            })
+            .map(|observation| ReliableSample {
+                temperature_f: observation.temperature as f64,
+                observed_at_unix_ms: observation.observed_at_unix_ms,
+            })
+            .collect();
+
+        if cooling_samples.len() < 2 {
+            return None;
+        }
+
+        // Air-temperature segments from the same history (cooling-only: no wind /
+        // humidity). Real timestamps + the configured site let the fit see any
+        // daytime solar warming intervals; with no location the site is disabled
+        // and the fit reduces to a plain Newtonian relaxation.
+        let site = self.solar_site();
+        let mut air_segments: Vec<thermal::WeatherSegment> = history
+            .air_temps
+            .iter()
+            .filter_map(|point| {
+                let at =
+                    controller_history_time_to_unix_ms(&point.time, controller_now, now_unix_ms)?;
+                Some((at, point.temp as f64))
+            })
+            .collect::<Vec<_>>()
+            .windows(2)
+            .filter_map(|window| {
+                let (start, air) = window[0];
+                let (end, _) = window[1];
+                (end > start).then_some(thermal::WeatherSegment {
+                    start_unix_ms: start,
+                    end_unix_ms: end,
+                    air_temp_f: air,
+                    wind_mph: None,
+                    humidity_fraction: None,
+                    cloud_fraction: None,
+                    latitude_deg: site.latitude_deg,
+                    longitude_deg: site.longitude_deg,
+                    cover_solar_transmission: site.cover_solar_transmission,
+                })
+            })
+            .collect();
+        air_segments.sort_by_key(|segment| segment.start_unix_ms);
+        if air_segments.is_empty() {
+            return None;
+        }
+
+        let seed = self.cooling_params(body);
+        let fit = thermal::fit_cooling_params(&cooling_samples, &air_segments, &seed);
+        // A degenerate fit returns the seed with NaN residual; don't persist that.
+        fit.residual_mae_f.is_finite().then_some(fit.params)
+    }
+
+    pub fn apply_to_system(&self, system: &mut PoolSystem, weather: &WeatherCache) {
         let use_celsius = uses_celsius(system.system.temp_unit);
         let air_temp_f = Some(to_fahrenheit(
             system.system.air_temperature as f64,
@@ -357,6 +735,15 @@ impl HeatEstimator {
                 pool.heat_estimate =
                     Some(self.estimate_for_body(HeatingBodyKind::Pool, &telemetry, use_celsius));
             }
+            self.apply_prediction(
+                HeatingBodyKind::Pool,
+                &trust,
+                &telemetry,
+                weather,
+                use_celsius,
+                now_unix_ms,
+                &mut PredictionFields::pool(pool),
+            );
             pool.temperature_display = temperature_display(pool);
             pool.heat_estimate_display = self.heat_estimate_display(
                 HeatingBodyKind::Pool,
@@ -381,6 +768,15 @@ impl HeatEstimator {
                 spa.heat_estimate =
                     Some(self.estimate_for_body(HeatingBodyKind::Spa, &telemetry, use_celsius));
             }
+            self.apply_prediction(
+                HeatingBodyKind::Spa,
+                &trust,
+                &telemetry,
+                weather,
+                use_celsius,
+                now_unix_ms,
+                &mut PredictionFields::spa(spa),
+            );
             spa.temperature_display = temperature_display(spa);
             spa.heat_estimate_display = self.heat_estimate_display(
                 HeatingBodyKind::Spa,
@@ -389,6 +785,118 @@ impl HeatEstimator {
                 spa.heat_estimate.as_ref(),
             );
             spa.spa_heat_progress = self.build_spa_heat_progress(spa);
+        }
+    }
+
+    /// Project the last reliable temperature forward and write the predicted
+    /// fields onto a body when the live reading is unreliable. Covered-when-idle:
+    /// an unreliable *idle* shared body is covered, so the gap is pure cooling —
+    /// heater-on subsegments never arise on this path.
+    ///
+    /// Degradation order (most → least trustworthy):
+    /// full weather → controller-air cooling-only → none/measured.
+    #[allow(clippy::too_many_arguments)]
+    fn apply_prediction(
+        &self,
+        body: HeatingBodyKind,
+        trust: &TemperatureTrust,
+        telemetry: &BodyTelemetry,
+        weather: &WeatherCache,
+        use_celsius: bool,
+        now_unix_ms: i64,
+        fields: &mut PredictionFields<'_>,
+    ) {
+        if trust.reliable {
+            return;
+        }
+        // Idle guard: only project cooling for a body that is genuinely idle
+        // (covered). A body that is on + circulating but momentarily unreliable
+        // (e.g. inside its shared-pump sensor warmup) is NOT cooling — projecting
+        // a cooling number there would be wrong, so fall back to measured/none.
+        let is_idle = !(telemetry.on && telemetry.active);
+        if !is_idle {
+            return;
+        }
+        let Some(anchor_obs) = self.last_reliable_temperature(body) else {
+            return;
+        };
+
+        let anchor = ReliableSample {
+            temperature_f: to_fahrenheit(anchor_obs.temperature as f64, use_celsius),
+            observed_at_unix_ms: anchor_obs.observed_at_unix_ms,
+        };
+        let params = self.cooling_params(body);
+
+        // Prefer fresh live weather; otherwise drop to a single controller-air
+        // cooling-only segment (no wind/humidity → ProjectedCoolingOnly), which
+        // is less trustworthy and so gets its confidence dropped a tier below.
+        let weather_fresh = weather
+            .latest_observation()
+            .is_some_and(|sample| now_unix_ms - sample.observed_at_unix_ms <= WEATHER_FRESHNESS_MS);
+        let site = self.solar_site();
+        let (projected, controller_air_fallback) = if weather_fresh {
+            let segments = weather.to_segments(site);
+            (
+                thermal::project_temperature(anchor, &segments, &params, now_unix_ms),
+                false,
+            )
+        } else if let Some(air_temp_f) = telemetry.air_temp_f {
+            let segment = WeatherSegment {
+                start_unix_ms: anchor.observed_at_unix_ms,
+                end_unix_ms: now_unix_ms,
+                air_temp_f,
+                wind_mph: None,
+                humidity_fraction: None,
+                cloud_fraction: None,
+                latitude_deg: site.latitude_deg,
+                longitude_deg: site.longitude_deg,
+                cover_solar_transmission: site.cover_solar_transmission,
+            };
+            (
+                thermal::project_temperature(anchor, &[segment], &params, now_unix_ms),
+                true,
+            )
+        } else {
+            // No fresh weather and no controller air temperature → cannot honestly
+            // project; project_temperature with no segments yields basis `none`.
+            (
+                thermal::project_temperature(anchor, &[], &params, now_unix_ms),
+                false,
+            )
+        };
+
+        // Fold the persisted rolling MAE into the surfaced confidence/uncertainty,
+        // and drop a tier when the projection rests on the controller air sensor.
+        let mae = self.prediction_mae(body).filter(|m| m.is_finite() && *m >= 0.0);
+        let mut confidence = projected.confidence;
+        if controller_air_fallback {
+            confidence = confidence.downgraded();
+        }
+        if mae.is_some_and(|m| m > MAE_CONFIDENCE_DOWNGRADE_F) {
+            confidence = confidence.downgraded();
+        }
+
+        // Always surface the basis/confidence so the client knows whether a
+        // number is honest; only populate the value for a real projection.
+        *fields.prediction_basis = Some(projected.basis.as_str().to_string());
+        *fields.prediction_confidence = Some(confidence.as_str().to_string());
+        *fields.prediction_as_of_unix_ms = Some(projected.as_of_unix_ms);
+
+        let projected_value = matches!(
+            projected.basis,
+            PredictionBasis::ProjectedWeather | PredictionBasis::ProjectedCoolingOnly
+        ) && projected.predicted_f.is_finite();
+        if projected_value {
+            // Uncertainty floor: never claim more precision than the measured
+            // rolling error supports.
+            let uncertainty = match mae {
+                Some(m) => projected.uncertainty_f.max(MAE_UNCERTAINTY_K * m),
+                None => projected.uncertainty_f,
+            };
+            *fields.predicted_temperature_f_precise = Some(projected.predicted_f);
+            *fields.predicted_temperature =
+                Some(from_fahrenheit(projected.predicted_f, use_celsius).round() as i32);
+            *fields.prediction_uncertainty_f = Some(uncertainty);
         }
     }
 
@@ -556,6 +1064,8 @@ impl HeatEstimator {
             ),
         };
 
+        let mut activity_window_to_push: Option<ActivityWindow> = None;
+
         match telemetry {
             Some(telemetry) if telemetry.active => {
                 if *last_active_observed == Some(false) {
@@ -569,12 +1079,31 @@ impl HeatEstimator {
                 *last_active_observed = Some(true);
             }
             Some(_) => {
+                if *last_active_observed == Some(true) {
+                    // Body just turned off: record the activity window so the
+                    // calibrator can reject cooling intervals it overlaps
+                    // (spec §3: idle across the WHOLE gap, not just endpoints).
+                    let start = slot.unwrap_or(now_unix_ms);
+                    activity_window_to_push = Some(ActivityWindow {
+                        body,
+                        start_unix_ms: start,
+                        end_unix_ms: now_unix_ms,
+                    });
+                }
                 *slot = None;
                 *last_active_observed = Some(false);
             }
             None => {
                 *slot = None;
                 *last_active_observed = None;
+            }
+        }
+
+        if let Some(window) = activity_window_to_push {
+            self.store.activity_windows.push(window);
+            let len = self.store.activity_windows.len();
+            if len > MAX_ACTIVITY_WINDOWS {
+                self.store.activity_windows.drain(..len - MAX_ACTIVITY_WINDOWS);
             }
         }
     }
@@ -928,6 +1457,373 @@ impl HeatEstimator {
         }
     }
 
+    /// Effective covered-idle cooling parameters for a body: the persisted
+    /// fit when present, otherwise the physics seed primed by `[heating.cooling]`
+    /// config seeds. `max_projection_hours` always tracks current config.
+    fn cooling_params(&self, body: HeatingBodyKind) -> CoolingParams {
+        let stored = match body {
+            HeatingBodyKind::Pool => self.store.pool_cooling_params,
+            HeatingBodyKind::Spa => self.store.spa_cooling_params,
+        };
+        let cooling = &self.config.cooling;
+        let mut params = stored.unwrap_or_else(CoolingParams::seed);
+        if stored.is_none() {
+            if let Some(tau) = cooling.tau_covered_hours.filter(|tau| *tau > 0.0) {
+                params.k0_per_hour = 1.0 / tau;
+            }
+            if let Some(evap_a) = cooling.evap_a {
+                params.evap_a = evap_a;
+            }
+            if let Some(evap_b) = cooling.evap_b {
+                params.evap_b = evap_b;
+            }
+            if let Some(solar_gain_f) = cooling.solar_gain_f.filter(|g| *g >= 0.0) {
+                params.solar_gain_f = solar_gain_f;
+            }
+        }
+        params.max_projection_hours = cooling.max_projection_hours.max(0.0);
+        params
+    }
+
+    fn cooling_params_slot_mut(&mut self, body: HeatingBodyKind) -> &mut Option<CoolingParams> {
+        match body {
+            HeatingBodyKind::Pool => &mut self.store.pool_cooling_params,
+            HeatingBodyKind::Spa => &mut self.store.spa_cooling_params,
+        }
+    }
+
+    fn prediction_mae_slot_mut(&mut self, body: HeatingBodyKind) -> &mut Option<f64> {
+        match body {
+            HeatingBodyKind::Pool => &mut self.store.pool_prediction_mae_f,
+            HeatingBodyKind::Spa => &mut self.store.spa_prediction_mae_f,
+        }
+    }
+
+    /// Persisted rolling prediction MAE (°F) for a body, if any.
+    fn prediction_mae(&self, body: HeatingBodyKind) -> Option<f64> {
+        match body {
+            HeatingBodyKind::Pool => self.store.pool_prediction_mae_f,
+            HeatingBodyKind::Spa => self.store.spa_prediction_mae_f,
+        }
+    }
+
+    fn intervals(&self, body: HeatingBodyKind) -> &[crate::calibrator::CoolingInterval] {
+        match body {
+            HeatingBodyKind::Pool => &self.store.pool_cooling_intervals,
+            HeatingBodyKind::Spa => &self.store.spa_cooling_intervals,
+        }
+    }
+
+    fn intervals_slot_mut(
+        &mut self,
+        body: HeatingBodyKind,
+    ) -> &mut Vec<crate::calibrator::CoolingInterval> {
+        match body {
+            HeatingBodyKind::Pool => &mut self.store.pool_cooling_intervals,
+            HeatingBodyKind::Spa => &mut self.store.spa_cooling_intervals,
+        }
+    }
+
+    /// The slow re-fit loop (spec §4.2, §6, §7): gated, holdout-validated,
+    /// damped, and SILENT (store-only; tracing debug; no event-log anywhere).
+    fn maybe_refit(&mut self, body: HeatingBodyKind, now_unix_ms: i64) {
+        let cal = self.config.calibration.clone();
+        if !cal.enabled {
+            return;
+        }
+        let last_refit = match body {
+            HeatingBodyKind::Pool => self.store.pool_last_refit_unix_ms,
+            HeatingBodyKind::Spa => self.store.spa_last_refit_unix_ms,
+        };
+        let min_gap_ms = (cal.refit_min_hours * 3_600_000.0) as i64;
+        if let Some(last) = last_refit {
+            if now_unix_ms - last < min_gap_ms {
+                return;
+            }
+        }
+        let window_start = now_unix_ms - (cal.window_days * 24.0 * 3_600_000.0) as i64;
+        let since_fit = last_refit.unwrap_or(i64::MIN);
+        let intervals = self.intervals(body);
+        let fresh_clean = intervals
+            .iter()
+            .filter(|i| {
+                i.t1_unix_ms > since_fit
+                    && i.regime == crate::calibrator::IntervalRegime::IdleCovered
+            })
+            .count();
+        let mae_drifted = self.prediction_mae(body).is_some_and(|m| m > cal.mae_drift_f);
+        if fresh_clean < cal.min_new_intervals && !mae_drifted {
+            return;
+        }
+
+        // Escape hatch (spec §9): a persistently-high exclusion rate means the
+        // model, not the water, is wrong — fit over EVERYTHING in the window.
+        let exclusion_window_start =
+            now_unix_ms - (cal.exclusion_window_days * 24.0 * 3_600_000.0) as i64;
+        let escape = crate::calibrator::exclusion_rate(intervals, exclusion_window_start)
+            > cal.exclusion_rate_threshold;
+        let window: Vec<crate::calibrator::CoolingInterval> = intervals
+            .iter()
+            .filter(|i| {
+                i.t1_unix_ms >= window_start
+                    && (escape || i.regime == crate::calibrator::IntervalRegime::IdleCovered)
+            })
+            .cloned()
+            .collect();
+        if window.len() < 3 {
+            return; // holdout_split needs both halves populated
+        }
+
+        let site = self.solar_site();
+        let current = self.cooling_params(body);
+        let (fit_set, holdout) = crate::calibrator::holdout_split(&window);
+        let candidate = crate::calibrator::fit_intervals(&fit_set, &current, site);
+        let accepted = crate::calibrator::evaluate_candidate(
+            &current, &candidate, &holdout, site, cal.damping_alpha, cal.accept_tolerance_f,
+        );
+        match accepted {
+            Some(blend) => {
+                debug!(?body, tau_hours = 1.0 / blend.k0_per_hour, escape,
+                    "calibrator: refit accepted (silent auto-apply)");
+                *self.cooling_params_slot_mut(body) = Some(blend);
+            }
+            None => {
+                debug!(?body, escape, "calibrator: refit rejected, keeping current");
+            }
+        }
+
+        // Bookkeeping either way: rate-limit stamp + MAE trend point.
+        match body {
+            HeatingBodyKind::Pool => self.store.pool_last_refit_unix_ms = Some(now_unix_ms),
+            HeatingBodyKind::Spa => self.store.spa_last_refit_unix_ms = Some(now_unix_ms),
+        }
+        if let Some(mae) = self.prediction_mae(body) {
+            self.store.mae_history.push(MaePoint { body, at_unix_ms: now_unix_ms, mae_f: mae });
+            let len = self.store.mae_history.len();
+            if len > MAX_MAE_POINTS {
+                self.store.mae_history.drain(..len - MAX_MAE_POINTS);
+            }
+        }
+        self.persist();
+    }
+
+    /// True when any recorded pump/body activity window for `body` overlaps the
+    /// open gap. Complements `heating_overlapped_gap` (heater sessions) so a
+    /// cooling interval is idle across its WHOLE span (spec §3).
+    fn activity_overlapped_gap(
+        &self,
+        body: HeatingBodyKind,
+        gap_start_unix_ms: i64,
+        gap_end_unix_ms: i64,
+    ) -> bool {
+        self.store.activity_windows.iter().any(|w| {
+            w.body == body
+                && w.start_unix_ms < gap_end_unix_ms
+                && w.end_unix_ms > gap_start_unix_ms
+        })
+    }
+
+    /// True when a heating session for `body` overlapped the sensing gap
+    /// `(gap_start, gap_end]`. The closed-loop calibration assumes the gap was
+    /// pure cooling (covered-when-idle); if the heater actually fired mid-gap the
+    /// cooling-only projection would double-count losses, so calibration is
+    /// skipped. A continuously-heating body cannot produce a gap (it stays
+    /// reliable), so only a *completed* session inside the window matters here —
+    /// this is a defensive guard against a future change that breaks that
+    /// invariant.
+    fn heating_overlapped_gap(
+        &self,
+        body: HeatingBodyKind,
+        gap_start_unix_ms: i64,
+        gap_end_unix_ms: i64,
+    ) -> bool {
+        self.store.recent_sessions.iter().any(|session| {
+            session.body == body
+                && session.started_at_unix_ms < gap_end_unix_ms
+                && session.ended_at_unix_ms > gap_start_unix_ms
+        })
+    }
+
+    /// Capture one classified cooling interval (spec §3, §11). The caller has
+    /// already established the gap is heater-free and the endpoint reading is
+    /// trusted; this adds the whole-gap pump/body-activity check, classifies
+    /// the residual, and stores a bounded, self-contained interval.
+    fn capture_cooling_interval(
+        &mut self,
+        body: HeatingBodyKind,
+        anchor: thermal::ReliableSample,
+        actual_f: f64,
+        error_f: f64,
+        segments: &[thermal::WeatherSegment],
+        now_unix_ms: i64,
+    ) {
+        if !self.config.calibration.enabled {
+            return;
+        }
+        if self.activity_overlapped_gap(body, anchor.observed_at_unix_ms, now_unix_ms) {
+            return; // the gap wasn't idle end-to-end — not a cooling interval
+        }
+        let weather =
+            crate::calibrator::bucket_weather(segments, anchor.observed_at_unix_ms, now_unix_ms);
+        if weather.is_empty() {
+            return; // no weather spanned the gap — interval is unusable
+        }
+        let scale = self.prediction_mae(body).unwrap_or(0.0).max(ANOMALY_MAE_FLOOR_F);
+        let regime = if error_f.abs() > ANOMALY_SIGMA * scale {
+            crate::calibrator::IntervalRegime::ExcludedAnomalous
+        } else {
+            crate::calibrator::IntervalRegime::IdleCovered
+        };
+        let interval = crate::calibrator::CoolingInterval {
+            t0_unix_ms: anchor.observed_at_unix_ms,
+            t1_unix_ms: now_unix_ms,
+            temp0_f: anchor.temperature_f,
+            temp1_f: actual_f,
+            regime,
+            weather,
+        };
+        let buffer = self.intervals_slot_mut(body);
+        buffer.push(interval);
+        let len = buffer.len();
+        if len > MAX_INTERVALS_PER_BODY {
+            buffer.drain(..len - MAX_INTERVALS_PER_BODY);
+        }
+    }
+
+    /// Closed-loop calibration (primary). When a body yields a fresh post-warmup
+    /// reliable reading after a sensing gap, compare it to what the predictor
+    /// would have said for this instant, fold the residual into a rolling MAE,
+    /// and nudge `k0` with a damped secant step. Must run BEFORE `update`, while
+    /// the stored last-reliable still points at the pre-gap anchor.
+    pub fn calibrate_predictions(&mut self, system: &PoolSystem, weather: &WeatherCache) {
+        let use_celsius = uses_celsius(system.system.temp_unit);
+        let air_temp_f = Some(to_fahrenheit(
+            system.system.air_temperature as f64,
+            use_celsius,
+        ));
+        let shared_pump = system.system.pool_spa_shared_pump;
+        let now_unix_ms = unix_time_ms();
+
+        if let Some(pool) = system.pool.as_ref() {
+            let telemetry = BodyTelemetry::from_pool(pool, air_temp_f, use_celsius, shared_pump);
+            self.calibrate_body(
+                HeatingBodyKind::Pool,
+                &telemetry,
+                weather,
+                use_celsius,
+                now_unix_ms,
+            );
+        }
+        if let Some(spa) = system.spa.as_ref() {
+            let telemetry = BodyTelemetry::from_spa(spa, air_temp_f, use_celsius, shared_pump);
+            self.calibrate_body(
+                HeatingBodyKind::Spa,
+                &telemetry,
+                weather,
+                use_celsius,
+                now_unix_ms,
+            );
+        }
+
+        self.maybe_refit(HeatingBodyKind::Pool, now_unix_ms);
+        self.maybe_refit(HeatingBodyKind::Spa, now_unix_ms);
+    }
+
+    fn calibrate_body(
+        &mut self,
+        body: HeatingBodyKind,
+        telemetry: &BodyTelemetry,
+        weather: &WeatherCache,
+        use_celsius: bool,
+        now_unix_ms: i64,
+    ) {
+        // Only learn from a fresh, trustworthy reading.
+        if !self
+            .temperature_trust_for_body(body, telemetry, now_unix_ms)
+            .reliable
+        {
+            return;
+        }
+        // A fresh settled read may be the post-mix truth for a just-finished
+        // heating session — learn the outlet offset + bulk rate (spec §8).
+        // This must run before the anchor/gap early-returns below: a settled
+        // read minutes after a session ends must still pair with it.
+        self.learn_outlet_offset(body, telemetry.temperature_f, now_unix_ms);
+        let Some(anchor_obs) = self.last_reliable_temperature(body) else {
+            return;
+        };
+        let gap_ms = now_unix_ms - anchor_obs.observed_at_unix_ms;
+        if gap_ms < MIN_CALIBRATION_GAP_MS {
+            return;
+        }
+        // Defensive: never calibrate across a gap a heater run overlapped, or the
+        // cooling-only projection would be compared against a partly-heated body.
+        if self.heating_overlapped_gap(body, anchor_obs.observed_at_unix_ms, now_unix_ms) {
+            return;
+        }
+
+        let anchor = ReliableSample {
+            temperature_f: to_fahrenheit(anchor_obs.temperature as f64, use_celsius),
+            observed_at_unix_ms: anchor_obs.observed_at_unix_ms,
+        };
+        let params = self.cooling_params(body);
+        let segments = weather.to_segments(self.solar_site());
+        let projected = thermal::project_temperature(anchor, &segments, &params, now_unix_ms);
+        // Cannot validate a non-projection (gap beyond cutoff / no weather).
+        if !matches!(
+            projected.basis,
+            PredictionBasis::ProjectedWeather | PredictionBasis::ProjectedCoolingOnly
+        ) {
+            return;
+        }
+
+        let actual_f = telemetry.temperature_f;
+        let error_f = actual_f - projected.predicted_f;
+
+        // Rolling MAE (EWMA).
+        let mae_slot = self.prediction_mae_slot_mut(body);
+        *mae_slot = Some(match *mae_slot {
+            Some(previous) => {
+                previous * (1.0 - PREDICTION_MAE_ALPHA) + error_f.abs() * PREDICTION_MAE_ALPHA
+            }
+            None => error_f.abs(),
+        });
+
+        // Persist the classified interval for the slow re-fit loop (spec §4.2).
+        self.capture_cooling_interval(body, anchor, actual_f, error_f, &segments, now_unix_ms);
+
+        // Damped secant step on k0 to drive the residual toward zero.
+        let bumped = CoolingParams {
+            k0_per_hour: (params.k0_per_hour * 1.05)
+                .clamp(1.0 / TAU_MAX_HOURS, 1.0 / TAU_MIN_HOURS),
+            ..params
+        };
+        let pred_bumped =
+            thermal::project_temperature(anchor, &segments, &bumped, now_unix_ms).predicted_f;
+        let dk = bumped.k0_per_hour - params.k0_per_hour;
+        let dpred = pred_bumped - projected.predicted_f;
+        // Sensitivity ∂pred/∂k0. When it is tiny the reading barely constrains
+        // k0, so the secant step is ill-conditioned (near divide-by-zero); reject
+        // it rather than take a wild leap.
+        let sensitivity = dpred / dk;
+        if dk.abs() > f64::EPSILON && sensitivity.abs() > K0_SENSITIVITY_FLOOR {
+            let raw_step = CALIBRATION_LEARNING_RATE * error_f / sensitivity;
+            // Clamp the per-step delta to a fraction of the current k0 (and EWMA-
+            // damped by CALIBRATION_LEARNING_RATE above) so one noisy reading
+            // cannot swing the cooling constant hard.
+            let max_step = (params.k0_per_hour * K0_MAX_STEP_FRACTION).max(MIN_K0_STEP);
+            let step = raw_step.clamp(-max_step, max_step);
+            let k0 = (params.k0_per_hour + step).clamp(1.0 / TAU_MAX_HOURS, 1.0 / TAU_MIN_HOURS);
+            if k0.is_finite() {
+                let mut tuned = params;
+                tuned.k0_per_hour = k0;
+                *self.cooling_params_slot_mut(body) = Some(tuned);
+            }
+        }
+
+        self.persist();
+    }
+
     fn temperature_trust_for_body(
         &self,
         body: HeatingBodyKind,
@@ -1057,19 +1953,86 @@ impl HeatEstimator {
         });
     }
 
-    fn persist(&self) {
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    /// Learn the heater-return sensor's outlet-vs-bulk offset and the true BULK
+    /// heating rate from the first settled read after a completed session
+    /// (spec §8): during firing the sensor reads ~6-10F above the mixed bulk,
+    /// so the session's end reading is outlet-biased; the settled read is truth.
+    fn learn_outlet_offset(&mut self, body: HeatingBodyKind, settled_bulk_f: f64, now_unix_ms: i64) {
+        if !self.config.calibration.enabled {
+            return;
         }
+        let window_ms = (self.config.calibration.offset_settle_window_hours * 3_600_000.0) as i64;
+        let done_slot_value = match body {
+            HeatingBodyKind::Pool => self.store.pool_offset_done_session_end_ms,
+            HeatingBodyKind::Spa => self.store.spa_offset_done_session_end_ms,
+        };
+        let Some(session) = self
+            .store
+            .recent_sessions
+            .iter()
+            .filter(|s| {
+                s.body == body
+                    && s.ended_at_unix_ms <= now_unix_ms
+                    && now_unix_ms - s.ended_at_unix_ms <= window_ms
+            })
+            .max_by_key(|s| s.ended_at_unix_ms)
+            .cloned()
+        else {
+            return;
+        };
+        if done_slot_value == Some(session.ended_at_unix_ms) {
+            return; // this session already produced its one offset sample
+        }
+        let heating_hours =
+            (session.ended_at_unix_ms - session.started_at_unix_ms) as f64 / 3_600_000.0;
+        if heating_hours <= 0.0 {
+            return;
+        }
+        let offset = session.end_temp_f - settled_bulk_f;
+        let bulk_rate = (settled_bulk_f - session.start_temp_f) / heating_hours;
+        if !offset.is_finite() || !bulk_rate.is_finite() {
+            return;
+        }
+        if !(-5.0..=20.0).contains(&offset) || !(0.0..=60.0).contains(&bulk_rate) || bulk_rate == 0.0 {
+            return; // implausible pairing — skip rather than poison the EWMA
+        }
+        const EWMA_ALPHA: f64 = 0.3;
+        let (offset_slot, rate_slot, done_slot) = match body {
+            HeatingBodyKind::Pool => (
+                &mut self.store.pool_outlet_offset_f,
+                &mut self.store.pool_bulk_rate_f_per_hour,
+                &mut self.store.pool_offset_done_session_end_ms,
+            ),
+            HeatingBodyKind::Spa => (
+                &mut self.store.spa_outlet_offset_f,
+                &mut self.store.spa_bulk_rate_f_per_hour,
+                &mut self.store.spa_offset_done_session_end_ms,
+            ),
+        };
+        *offset_slot = Some(match *offset_slot {
+            Some(prev) => prev * (1.0 - EWMA_ALPHA) + offset * EWMA_ALPHA,
+            None => offset,
+        });
+        *rate_slot = Some(match *rate_slot {
+            Some(prev) => prev * (1.0 - EWMA_ALPHA) + bulk_rate * EWMA_ALPHA,
+            None => bulk_rate,
+        });
+        *done_slot = Some(session.ended_at_unix_ms);
+        self.persist();
+    }
 
-        match serde_json::to_string_pretty(&self.store) {
-            Ok(json) => {
-                if let Err(error) = std::fs::write(&self.path, json) {
-                    warn!("failed to persist heat estimator store: {}", error);
-                }
+    fn persist(&self) {
+        // Serialize while we hold `&self` (cheap, in-memory), then hand the bytes
+        // off so the synchronous filesystem write does not block the async worker
+        // that holds the shared-state lock. See `write_json_off_lock`.
+        let json = match serde_json::to_string_pretty(&self.store) {
+            Ok(json) => json,
+            Err(error) => {
+                warn!("failed to serialize heat estimator store: {}", error);
+                return;
             }
-            Err(error) => warn!("failed to serialize heat estimator store: {}", error),
-        }
+        };
+        write_json_off_lock(self.path.clone(), json, "heat estimator store");
     }
 
     fn session_slot(&self, body: HeatingBodyKind) -> Option<&ActiveHeatingSession> {
@@ -1091,6 +2054,60 @@ impl HeatEstimator {
             && telemetry.active
             && telemetry.heat_mode != "off"
             && telemetry.setpoint_f > telemetry.temperature_f
+    }
+
+    /// Read-only calibration state for GET /api/pool/calibration (spec §10).
+    /// Current state only — no change history exists by design (spec §7).
+    pub fn calibration_snapshot(&self, now_unix_ms: i64) -> serde_json::Value {
+        let body_json = |body: HeatingBodyKind| {
+            let params = self.cooling_params(body);
+            let intervals = self.intervals(body);
+            let idle = intervals
+                .iter()
+                .filter(|i| i.regime == crate::calibrator::IntervalRegime::IdleCovered)
+                .count();
+            let excluded = intervals.len() - idle;
+            let exclusion_window_start = now_unix_ms
+                - (self.config.calibration.exclusion_window_days * 24.0 * 3_600_000.0) as i64;
+            let (last_refit, offset, bulk_rate) = match body {
+                HeatingBodyKind::Pool => (
+                    self.store.pool_last_refit_unix_ms,
+                    self.store.pool_outlet_offset_f,
+                    self.store.pool_bulk_rate_f_per_hour,
+                ),
+                HeatingBodyKind::Spa => (
+                    self.store.spa_last_refit_unix_ms,
+                    self.store.spa_outlet_offset_f,
+                    self.store.spa_bulk_rate_f_per_hour,
+                ),
+            };
+            serde_json::json!({
+                "params": {
+                    "tau_hours": 1.0 / params.k0_per_hour,
+                    "k0_per_hour": params.k0_per_hour,
+                    "k_wind_per_hour_per_mph": params.k_wind_per_hour_per_mph,
+                    "evap_a": params.evap_a,
+                    "evap_b": params.evap_b,
+                    "solar_gain_f": params.solar_gain_f,
+                },
+                "rolling_mae_f": self.prediction_mae(body),
+                "last_refit_unix_ms": last_refit,
+                "outlet_offset_f": offset,
+                "bulk_rate_f_per_hour": bulk_rate,
+                "interval_counts": { "idle_covered": idle, "excluded_anomalous": excluded },
+                "exclusion_rate_recent":
+                    crate::calibrator::exclusion_rate(intervals, exclusion_window_start),
+            })
+        };
+        serde_json::json!({
+            "as_of_unix_ms": now_unix_ms,
+            "enabled": self.config.calibration.enabled,
+            "pool": body_json(HeatingBodyKind::Pool),
+            "spa": body_json(HeatingBodyKind::Spa),
+            "mae_trend": self.store.mae_history.iter().map(|p| serde_json::json!({
+                "body": p.body, "at_unix_ms": p.at_unix_ms, "mae_f": p.mae_f,
+            })).collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -1136,14 +2153,18 @@ impl BodyTelemetry {
     }
 }
 
-fn latest_history_observation_for_body(
+/// All reliable (temperature, time) samples for a body from controller history:
+/// temperature points that fall inside a circulation run (past the shared-pump
+/// warmup). Sorted ascending by time. Shared by the last-reliable backfill and
+/// the cooling-parameter history seed.
+fn reliable_history_observations_for_body(
     body: HeatingBodyKind,
     history: &HistoryData,
     controller_now: &NaiveDateTime,
     now_unix_ms: i64,
     pool_spa_shared_pump: bool,
     shared_warmup_seconds: u64,
-) -> Option<ReliableTemperatureObservation> {
+) -> Vec<ReliableTemperatureObservation> {
     let (temps, runs) = match body {
         HeatingBodyKind::Pool => (&history.pool_temps, &history.pool_runs),
         HeatingBodyKind::Spa => (&history.spa_temps, &history.spa_runs),
@@ -1154,7 +2175,7 @@ fn latest_history_observation_for_body(
         0
     };
 
-    temps
+    let mut observations: Vec<ReliableTemperatureObservation> = temps
         .iter()
         .filter_map(|point| {
             let sample_unix_ms =
@@ -1173,7 +2194,30 @@ fn latest_history_observation_for_body(
                 observed_at_unix_ms: sample_unix_ms,
             })
         })
-        .max_by_key(|observation| observation.observed_at_unix_ms)
+        .collect();
+    observations.sort_by_key(|observation| observation.observed_at_unix_ms);
+    observations
+}
+
+/// Thin wrapper: the most recent reliable observation for a body.
+fn latest_history_observation_for_body(
+    body: HeatingBodyKind,
+    history: &HistoryData,
+    controller_now: &NaiveDateTime,
+    now_unix_ms: i64,
+    pool_spa_shared_pump: bool,
+    shared_warmup_seconds: u64,
+) -> Option<ReliableTemperatureObservation> {
+    reliable_history_observations_for_body(
+        body,
+        history,
+        controller_now,
+        now_unix_ms,
+        pool_spa_shared_pump,
+        shared_warmup_seconds,
+    )
+    .into_iter()
+    .max_by_key(|observation| observation.observed_at_unix_ms)
 }
 
 fn history_run_contains_sample(
@@ -1257,6 +2301,7 @@ fn temperature_display(body: &impl TemperatureDisplaySource) -> TemperatureDispl
         is_stale: !body.temperature_reliable(),
         stale_reason: body.temperature_reason().map(str::to_string),
         last_reliable_at_unix_ms: body.last_reliable_temperature_at_unix_ms(),
+        is_predicted: body.predicted_temperature().is_some(),
     }
 }
 
@@ -1266,6 +2311,7 @@ trait TemperatureDisplaySource {
     fn temperature_reason(&self) -> Option<&str>;
     fn last_reliable_temperature(&self) -> Option<i32>;
     fn last_reliable_temperature_at_unix_ms(&self) -> Option<i64>;
+    fn predicted_temperature(&self) -> Option<i32>;
 }
 
 impl TemperatureDisplaySource for BodyState {
@@ -1287,6 +2333,10 @@ impl TemperatureDisplaySource for BodyState {
 
     fn last_reliable_temperature_at_unix_ms(&self) -> Option<i64> {
         self.last_reliable_temperature_at_unix_ms
+    }
+
+    fn predicted_temperature(&self) -> Option<i32> {
+        self.predicted_temperature
     }
 }
 
@@ -1310,6 +2360,10 @@ impl TemperatureDisplaySource for SpaState {
     fn last_reliable_temperature_at_unix_ms(&self) -> Option<i64> {
         self.last_reliable_temperature_at_unix_ms
     }
+
+    fn predicted_temperature(&self) -> Option<i32> {
+        self.predicted_temperature
+    }
 }
 
 fn uses_celsius(temp_unit: &str) -> bool {
@@ -1321,6 +2375,49 @@ fn to_fahrenheit(value: f64, use_celsius: bool) -> f64 {
         value * 9.0 / 5.0 + 32.0
     } else {
         value
+    }
+}
+
+fn from_fahrenheit(value_f: f64, use_celsius: bool) -> f64 {
+    if use_celsius {
+        (value_f - 32.0) * 5.0 / 9.0
+    } else {
+        value_f
+    }
+}
+
+/// Mutable borrows of a body's additive prediction fields, so the projection
+/// logic can be written once for both [`BodyState`] and [`SpaState`].
+struct PredictionFields<'a> {
+    predicted_temperature: &'a mut Option<i32>,
+    predicted_temperature_f_precise: &'a mut Option<f64>,
+    prediction_confidence: &'a mut Option<String>,
+    prediction_uncertainty_f: &'a mut Option<f64>,
+    prediction_as_of_unix_ms: &'a mut Option<i64>,
+    prediction_basis: &'a mut Option<String>,
+}
+
+impl<'a> PredictionFields<'a> {
+    fn pool(body: &'a mut BodyState) -> Self {
+        Self {
+            predicted_temperature: &mut body.predicted_temperature,
+            predicted_temperature_f_precise: &mut body.predicted_temperature_f_precise,
+            prediction_confidence: &mut body.prediction_confidence,
+            prediction_uncertainty_f: &mut body.prediction_uncertainty_f,
+            prediction_as_of_unix_ms: &mut body.prediction_as_of_unix_ms,
+            prediction_basis: &mut body.prediction_basis,
+        }
+    }
+
+    fn spa(body: &'a mut SpaState) -> Self {
+        Self {
+            predicted_temperature: &mut body.predicted_temperature,
+            predicted_temperature_f_precise: &mut body.predicted_temperature_f_precise,
+            prediction_confidence: &mut body.prediction_confidence,
+            prediction_uncertainty_f: &mut body.prediction_uncertainty_f,
+            prediction_as_of_unix_ms: &mut body.prediction_as_of_unix_ms,
+            prediction_basis: &mut body.prediction_basis,
+        }
     }
 }
 
@@ -1337,6 +2434,91 @@ fn unix_time_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+/// Per-path write ordering for [`write_json_off_lock`]: `(next_gen_to_assign,
+/// last_written_gen)`. Offloaded writes to the same path can complete out of
+/// order (e.g. `calibrate_body` persists, then `maybe_refit` persists a newer
+/// accepted fit, but the older write's blocking task happens to finish last);
+/// without this, the stale write can clobber the newer snapshot on disk even
+/// though in-memory state stays correct. Keyed by path since the estimator
+/// only ever persists one file today, but nothing prevents more callers.
+static WRITE_GENERATIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, u64)>>,
+> = std::sync::OnceLock::new();
+
+fn write_generations() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, u64)>>
+{
+    WRITE_GENERATIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Claims the next write-generation for `path`, incrementing the counter.
+/// Called synchronously at persist time, before the write is offloaded, so
+/// generations are assigned in the same order callers logically intended.
+fn assign_write_generation(path: &PathBuf) -> u64 {
+    let mut map = write_generations().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = map.entry(path.clone()).or_insert((1, 0));
+    let gen = entry.0;
+    entry.0 += 1;
+    gen
+}
+
+/// Pure decision: should generation `my_gen` actually be committed given the
+/// last-committed generation for its path? If so, records it as committed.
+/// Pulled out of `write_json_off_lock` so the ordering logic is unit-testable
+/// without touching the filesystem.
+fn should_commit_write(last_written: &mut u64, my_gen: u64) -> bool {
+    if my_gen > *last_written {
+        *last_written = my_gen;
+        true
+    } else {
+        false
+    }
+}
+
+/// Write `json` to `path` without blocking the async worker while the shared
+/// state lock is held. When a Tokio runtime is available the synchronous
+/// filesystem write is offloaded to a blocking thread (atomic temp-file +
+/// rename, so a reader never sees a torn file); otherwise — e.g. unit tests with
+/// no runtime — it is written inline so behaviour stays deterministic.
+///
+/// Generation-ordered per path (see [`WRITE_GENERATIONS`]): if an offloaded
+/// write for this path with a *newer* generation has already committed by the
+/// time this one runs, this write is skipped rather than clobbering it. The
+/// check-write-record sequence happens under one lock hold, serializing
+/// writers to the same path — acceptable since these are small files.
+fn write_json_off_lock(path: PathBuf, json: String, label: &'static str) {
+    let my_gen = assign_write_generation(&path);
+    let write = move || {
+        let mut map = write_generations().lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(path.clone()).or_insert((1, 0));
+        if !should_commit_write(&mut entry.1, my_gen) {
+            debug!(
+                gen = my_gen,
+                last_written = entry.1,
+                "heat estimator: skipping stale offloaded write for {}",
+                label
+            );
+            return;
+        }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let tmp = path.with_extension("tmp");
+        if let Err(error) = std::fs::write(&tmp, json.as_bytes()) {
+            warn!("failed to persist {}: {}", label, error);
+            return;
+        }
+        if let Err(error) = std::fs::rename(&tmp, &path) {
+            warn!("failed to persist {}: {}", label, error);
+        }
+    };
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn_blocking(write);
+        }
+        Err(_) => write(),
+    }
 }
 
 #[cfg(test)]
@@ -1393,11 +2575,18 @@ mod tests {
                 heat_mode: "heat-pump".to_string(),
                 heating: "off".to_string(),
                 heat_estimate: None,
+                predicted_temperature: None,
+                predicted_temperature_f_precise: None,
+                prediction_confidence: None,
+                prediction_uncertainty_f: None,
+                prediction_as_of_unix_ms: None,
+                prediction_basis: None,
                 temperature_display: TemperatureDisplay {
                     value: Some(80),
                     is_stale: false,
                     stale_reason: None,
                     last_reliable_at_unix_ms: None,
+                    is_predicted: false,
                 },
                 heat_estimate_display: HeatEstimateDisplay {
                     state: "unavailable".to_string(),
@@ -1419,11 +2608,18 @@ mod tests {
                 heat_mode: "heat-pump".to_string(),
                 heating: spa_heating.to_string(),
                 heat_estimate: None,
+                predicted_temperature: None,
+                predicted_temperature_f_precise: None,
+                prediction_confidence: None,
+                prediction_uncertainty_f: None,
+                prediction_as_of_unix_ms: None,
+                prediction_basis: None,
                 temperature_display: TemperatureDisplay {
                     value: Some(spa_temp),
                     is_stale: false,
                     stale_reason: None,
                     last_reliable_at_unix_ms: None,
+                    is_predicted: false,
                 },
                 heat_estimate_display: HeatEstimateDisplay {
                     state: "unavailable".to_string(),
@@ -1478,6 +2674,17 @@ mod tests {
         path
     }
 
+    /// Fixture: a fresh estimator backed by a unique temp-file store path (no
+    /// existing tempdir-tuple fixture exists in this module, so this follows
+    /// `test_store_path`'s pid-plus-name-based uniqueness instead).
+    fn test_estimator() -> HeatEstimator {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = test_store_path(&format!("activity-windows-{id}"));
+        HeatEstimator::load(test_config(), path)
+    }
+
     fn history_time(day: u16, hour: u16, minute: u16, second: u16) -> SLDateTime {
         SLDateTime {
             year: 2026,
@@ -1499,7 +2706,7 @@ mod tests {
 
         estimator.update(&system);
         estimator.spa_active_since_unix_ms = Some(unix_time_ms() - 121_000);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let estimate = system
             .spa
@@ -1519,7 +2726,7 @@ mod tests {
         system.system.pool_spa_shared_pump = false;
 
         estimator.update(&system);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let estimate = system
             .spa
@@ -1636,7 +2843,7 @@ mod tests {
 
         estimator.update(&system);
         estimator.spa_active_since_unix_ms = Some(unix_time_ms() - 121_000);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let estimate = system
             .spa
@@ -1654,7 +2861,7 @@ mod tests {
         let mut system = test_system(99, 104, false, false, "off");
 
         estimator.update(&system);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let spa = system.spa.expect("spa");
         assert!(!spa.temperature_reliable);
@@ -1678,7 +2885,7 @@ mod tests {
         estimator.spa_active_since_unix_ms = Some(unix_time_ms() - 121_000);
         estimator.update(&trusted_system);
         estimator.update(&stale_system);
-        estimator.apply_to_system(&mut stale_system);
+        estimator.apply_to_system(&mut stale_system, &WeatherCache::default());
 
         let spa = stale_system.spa.expect("spa");
         assert!(!spa.temperature_reliable);
@@ -1695,7 +2902,7 @@ mod tests {
 
         estimator.update(&off_system);
         estimator.update(&system);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let spa = system.spa.expect("spa");
         assert!(!spa.temperature_reliable);
@@ -1739,7 +2946,7 @@ mod tests {
 
         estimator.update(&inactive_system);
         estimator.update(&active_system);
-        estimator.apply_to_system(&mut active_system);
+        estimator.apply_to_system(&mut active_system, &WeatherCache::default());
 
         let pool = active_system.pool.expect("pool");
         let estimate = pool.heat_estimate.expect("pool estimate");
@@ -1756,7 +2963,7 @@ mod tests {
         let mut system = test_system(100, 104, true, true, "heater");
 
         estimator.update(&system);
-        estimator.apply_to_system(&mut system);
+        estimator.apply_to_system(&mut system, &WeatherCache::default());
 
         let spa = system.spa.expect("spa");
         assert!(spa.temperature_reliable);
@@ -1855,5 +3062,922 @@ mod tests {
             .last_reliable_temperature(HeatingBodyKind::Spa)
             .expect("spa observation");
         assert_eq!(observation.temperature, 99);
+    }
+
+    fn weather_sample(at_ms: i64, air_f: f64) -> crate::weather::WeatherSample {
+        crate::weather::WeatherSample {
+            observed_at_unix_ms: at_ms,
+            air_temp_f: air_f,
+            wind_mph: Some(5.0),
+            humidity_fraction: Some(0.5),
+            cloud_fraction: Some(0.3),
+            is_forecast: false,
+        }
+    }
+
+    /// Hourly observed weather covering `hours` back from `now`.
+    fn gap_weather(now: i64, hours: i64, air_f: f64) -> WeatherCache {
+        let mut weather = WeatherCache::default();
+        for h in 0..hours {
+            weather.record_observation(weather_sample(now - (hours - h) * 3_600_000, air_f), now);
+        }
+        weather
+    }
+
+    /// A single full-weather `WeatherSegment` spanning `[start_ms, end_ms)`,
+    /// with a disabled solar site so `capture_cooling_interval` tests don't
+    /// need real geometry.
+    fn test_weather_segment(start_ms: i64, end_ms: i64, air_f: f64) -> WeatherSegment {
+        WeatherSegment {
+            start_unix_ms: start_ms,
+            end_unix_ms: end_ms,
+            air_temp_f: air_f,
+            wind_mph: Some(0.0),
+            humidity_fraction: Some(0.6),
+            cloud_fraction: Some(0.0),
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
+        }
+    }
+
+    #[test]
+    fn unreliable_shared_body_gets_weather_prediction() {
+        let path = test_store_path("prediction-wiring");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        // 2h-old reliable spa reading as the anchor.
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 98,
+            observed_at_unix_ms: now - 2 * 3_600_000,
+        });
+        // Spa off on a shared pump => unreliable => prediction engages.
+        let mut system = test_system(98, 104, false, false, "off");
+        let weather = gap_weather(now, 3, 60.0); // cool air
+
+        estimator.apply_to_system(&mut system, &weather);
+
+        let spa = system.spa.expect("spa");
+        assert!(!spa.temperature_reliable);
+        assert_eq!(spa.prediction_basis.as_deref(), Some("projected-weather"));
+        let predicted = spa.predicted_temperature.expect("predicted temperature");
+        assert!(
+            predicted < 98,
+            "water should cool toward cool air: {predicted}"
+        );
+        assert!(spa.predicted_temperature_f_precise.unwrap() < 98.0);
+        assert!(spa.prediction_uncertainty_f.unwrap() > 0.0);
+        assert_eq!(spa.prediction_as_of_unix_ms, Some(now));
+        assert!(spa.temperature_display.is_predicted);
+    }
+
+    #[test]
+    fn reliable_body_has_no_prediction_fields() {
+        let path = test_store_path("prediction-skip-reliable");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let mut system = test_system(99, 104, true, true, "heater");
+        system.system.pool_spa_shared_pump = false; // always reliable
+
+        estimator.update(&system);
+        let now = unix_time_ms();
+        let weather = gap_weather(now, 3, 60.0);
+        estimator.apply_to_system(&mut system, &weather);
+
+        let spa = system.spa.expect("spa");
+        assert!(spa.temperature_reliable);
+        assert!(spa.predicted_temperature.is_none());
+        assert!(spa.prediction_basis.is_none());
+        assert!(!spa.temperature_display.is_predicted);
+    }
+
+    #[test]
+    fn calibration_records_mae_after_a_gap() {
+        let path = test_store_path("calibration-mae");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        // Anchor 3h ago; fresh reliable reading now.
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 100,
+            observed_at_unix_ms: now - 3 * 3_600_000,
+        });
+        let system = test_system(90, 104, true, true, "heater");
+        estimator.spa_active_since_unix_ms = Some(now - 121_000); // past warmup
+        let weather = gap_weather(now, 4, 70.0);
+
+        estimator.calibrate_predictions(&system, &weather);
+
+        assert!(
+            estimator.store.spa_prediction_mae_f.is_some(),
+            "a fresh reading after a gap should update the rolling MAE"
+        );
+    }
+
+    #[test]
+    fn calibration_skipped_when_heater_ran_during_gap() {
+        let path = test_store_path("calibration-heater-overlap");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        // Anchor 3h ago; a completed heating session sits inside the gap.
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 100,
+            observed_at_unix_ms: now - 3 * 3_600_000,
+        });
+        estimator.store.recent_sessions.push(CompletedHeatingSession {
+            body: HeatingBodyKind::Spa,
+            started_at_unix_ms: now - 2 * 3_600_000,
+            ended_at_unix_ms: now - 3_600_000,
+            start_temp_f: 95.0,
+            end_temp_f: 102.0,
+            target_temp_f: 104.0,
+            average_air_temp_f: Some(70.0),
+            duration_minutes: 60.0,
+            average_rate_f_per_hour: 7.0,
+        });
+        let system = test_system(90, 104, true, true, "heater");
+        estimator.spa_active_since_unix_ms = Some(now - 121_000); // past warmup
+        let weather = gap_weather(now, 4, 70.0);
+
+        estimator.calibrate_predictions(&system, &weather);
+
+        assert!(
+            estimator.store.spa_prediction_mae_f.is_none(),
+            "a heater run overlapping the gap must skip calibration (no MAE update)"
+        );
+    }
+
+    #[test]
+    fn capture_stores_idle_interval_and_tags_anomalies() {
+        let mut estimator = test_estimator();
+        let segs = vec![test_weather_segment(0, 20 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample {
+            temperature_f: 90.0,
+            observed_at_unix_ms: 0,
+        };
+        // Normal residual -> IdleCovered.
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor,
+            89.0,
+            0.3,
+            &segs,
+            10 * 3_600_000,
+        );
+        assert_eq!(estimator.intervals(HeatingBodyKind::Spa).len(), 1);
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Spa)[0].regime,
+            crate::calibrator::IntervalRegime::IdleCovered
+        );
+        // Huge residual (way past 3 * max(mae, 0.75)) -> ExcludedAnomalous.
+        let anchor2 = thermal::ReliableSample {
+            temperature_f: 89.0,
+            observed_at_unix_ms: 10 * 3_600_000,
+        };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor2,
+            80.0,
+            -9.0,
+            &segs,
+            20 * 3_600_000,
+        );
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Spa)[1].regime,
+            crate::calibrator::IntervalRegime::ExcludedAnomalous
+        );
+    }
+
+    #[test]
+    fn capture_discards_gap_overlapping_body_activity() {
+        let mut estimator = test_estimator();
+        // Body ran 4h..5h inside the 0..10h gap.
+        estimator.test_note_activity(HeatingBodyKind::Spa, true, 4 * 3_600_000);
+        estimator.test_note_activity(HeatingBodyKind::Spa, false, 5 * 3_600_000);
+        let segs = vec![test_weather_segment(0, 20 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample {
+            temperature_f: 90.0,
+            observed_at_unix_ms: 0,
+        };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor,
+            89.0,
+            0.3,
+            &segs,
+            10 * 3_600_000,
+        );
+        assert!(estimator.intervals(HeatingBodyKind::Spa).is_empty());
+    }
+
+    #[test]
+    fn interval_buffer_is_bounded() {
+        let mut estimator = test_estimator();
+        // A single segment spanning the whole test range. `bucket_weather`'s
+        // bucket count is driven only by each call's own `[anchor, now]` gap
+        // (8h here), not by the segment's own span, so an oversized segment
+        // end (matching the spec's stress-test shape) stays cheap.
+        let segs = vec![test_weather_segment(0, i64::MAX / 2, 60.0)];
+        for i in 0..(MAX_INTERVALS_PER_BODY + 10) {
+            let t0 = i as i64 * 10 * 3_600_000;
+            let anchor = thermal::ReliableSample {
+                temperature_f: 90.0,
+                observed_at_unix_ms: t0,
+            };
+            estimator.capture_cooling_interval(
+                HeatingBodyKind::Pool,
+                anchor,
+                89.5,
+                0.1,
+                &segs,
+                t0 + 8 * 3_600_000,
+            );
+        }
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Pool).len(),
+            MAX_INTERVALS_PER_BODY
+        );
+    }
+
+    /// A hand-edited/corrupted `heat-estimator.json` bypasses every cap and
+    /// invariant the daemon's own write paths enforce. `load_with_notifications`
+    /// must sanitize it on the way in: cap each Vec (keeping the newest
+    /// entries), truncate per-interval weather to `MAX_BUCKETS_PER_INTERVAL`
+    /// (keeping the earliest — chronological), and drop entries with
+    /// non-finite temperatures, non-positive-duration intervals, or
+    /// timestamps outside a sane epoch-ms range.
+    #[test]
+    fn load_sanitizes_malformed_persisted_store() {
+        let path = test_store_path("malformed-store-sanitize");
+
+        // Year-9999 in epoch-ms — well past the sane upper bound.
+        const YEAR_9999_MS: i64 = 253_402_300_800_000;
+
+        let bucket = |t0: i64, i: i64| {
+            format!(
+                r#"{{"start_unix_ms":{s},"end_unix_ms":{e},"air_temp_f":60.0,"wind_mph":null,"humidity_fraction":null,"cloud_fraction":null}}"#,
+                s = t0 + i * 60_000,
+                e = t0 + (i + 1) * 60_000,
+            )
+        };
+        let weather_json = |t0: i64| (0..50).map(|i| bucket(t0, i)).collect::<Vec<_>>().join(",");
+
+        // 300 pool cooling intervals (cap is 200), each carrying 50 weather
+        // buckets (cap per-interval is 24). Three are deliberately special:
+        //   i=0: temp0_f is a huge-but-parseable JSON number (`1e300`). JSON
+        //        has no `NaN`/`Infinity` literal and serde_json errors out
+        //        ("number out of range") on an f64 literal like `1e999` that
+        //        can't even parse — so this instead proves a huge finite
+        //        value round-trips through deserialize without panicking or
+        //        forcing pathological allocation; it is NOT itself invalid
+        //        (`is_finite()` is true), so it must survive sanitization.
+        //   i=1: t1_unix_ms <= t0_unix_ms (non-positive-duration interval) —
+        //        must be dropped.
+        //   i=2: t1_unix_ms lands in the year 9999 (outside the sane range)
+        //        — must be dropped.
+        let mut intervals = Vec::new();
+        for i in 0..300i64 {
+            let t0 = i * 3_600_000;
+            let mut t1 = t0 + 3_600_000;
+            let mut temp0 = "90.0".to_string();
+            if i == 0 {
+                temp0 = "1e300".to_string();
+            }
+            if i == 1 {
+                t1 = t0;
+            }
+            if i == 2 {
+                t1 = YEAR_9999_MS;
+            }
+            intervals.push(format!(
+                r#"{{"t0_unix_ms":{t0},"t1_unix_ms":{t1},"temp0_f":{temp0},"temp1_f":85.0,"regime":"IdleCovered","weather":[{w}]}}"#,
+                w = weather_json(t0),
+            ));
+        }
+
+        // 300 activity windows (cap is 200); one has an out-of-range end.
+        let mut windows = Vec::new();
+        for i in 0..300i64 {
+            let start = i * 1_800_000;
+            let end = if i == 0 { YEAR_9999_MS } else { start + 900_000 };
+            windows.push(format!(
+                r#"{{"body":"Pool","start_unix_ms":{start},"end_unix_ms":{end}}}"#
+            ));
+        }
+
+        // 200 MAE points (cap is 100); one has an out-of-range timestamp.
+        let mut mae_points = Vec::new();
+        for i in 0..200i64 {
+            let at = if i == 0 { YEAR_9999_MS } else { i * 3_600_000 };
+            mae_points.push(format!(r#"{{"body":"Pool","at_unix_ms":{at},"mae_f":1.5}}"#));
+        }
+
+        let json = format!(
+            r#"{{
+                "pool_learned_rate_f_per_hour": null,
+                "spa_learned_rate_f_per_hour": null,
+                "pool_last_reliable_temperature": null,
+                "spa_last_reliable_temperature": null,
+                "recent_sessions": [],
+                "pool_cooling_intervals": [{intervals}],
+                "spa_cooling_intervals": [],
+                "activity_windows": [{windows}],
+                "mae_history": [{mae}]
+            }}"#,
+            intervals = intervals.join(","),
+            windows = windows.join(","),
+            mae = mae_points.join(","),
+        );
+        std::fs::write(&path, json).expect("write malformed store fixture");
+
+        let estimator = HeatEstimator::load(test_config(), path);
+
+        assert!(
+            !estimator.store.pool_cooling_intervals.is_empty(),
+            "all intervals were dropped — sanitizer too aggressive"
+        );
+        assert!(
+            estimator.store.pool_cooling_intervals.len() <= MAX_INTERVALS_PER_BODY,
+            "intervals not capped: {}",
+            estimator.store.pool_cooling_intervals.len()
+        );
+        for interval in &estimator.store.pool_cooling_intervals {
+            assert!(interval.temp0_f.is_finite());
+            assert!(interval.temp1_f.is_finite());
+            assert!(interval.t1_unix_ms > interval.t0_unix_ms);
+            assert!(interval.t0_unix_ms > 0 && interval.t0_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(interval.t1_unix_ms > 0 && interval.t1_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(
+                interval.weather.len() <= crate::calibrator::MAX_BUCKETS_PER_INTERVAL,
+                "weather not truncated: {}",
+                interval.weather.len()
+            );
+        }
+
+        assert!(estimator.store.activity_windows.len() <= MAX_ACTIVITY_WINDOWS);
+        for w in &estimator.store.activity_windows {
+            assert!(w.start_unix_ms > 0 && w.start_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(w.end_unix_ms > 0 && w.end_unix_ms < MAX_SANE_UNIX_MS);
+        }
+
+        assert!(estimator.store.mae_history.len() <= MAX_MAE_POINTS);
+        for p in &estimator.store.mae_history {
+            assert!(p.mae_f.is_finite());
+            assert!(p.at_unix_ms > 0 && p.at_unix_ms < MAX_SANE_UNIX_MS);
+        }
+    }
+
+    #[test]
+    fn active_warmup_body_gets_no_cooling_projection() {
+        // Idle guard: a body that is on + active but unreliable (sensor warmup)
+        // is circulating, not cooling — it must NOT receive a cooling projection.
+        let path = test_store_path("prediction-warmup-guard");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 98,
+            observed_at_unix_ms: now - 2 * 3_600_000,
+        });
+        // on + active, but it just became active → still inside warmup → unreliable.
+        estimator.spa_active_since_unix_ms = Some(now);
+        let mut system = test_system(98, 104, true, true, "heater");
+        let weather = gap_weather(now, 3, 60.0);
+
+        estimator.apply_to_system(&mut system, &weather);
+
+        let spa = system.spa.expect("spa");
+        assert!(!spa.temperature_reliable, "warmup body is unreliable");
+        assert!(
+            spa.predicted_temperature.is_none(),
+            "an actively-circulating (warmup) body must not get a cooling projection"
+        );
+        assert!(spa.prediction_basis.is_none());
+        assert!(!spa.temperature_display.is_predicted);
+    }
+
+    #[test]
+    fn stale_weather_falls_back_to_controller_air_cooling_only() {
+        // No fresh weather sample → degrade to a controller-air cooling-only
+        // projection (basis projected-cooling-only), not none.
+        let path = test_store_path("prediction-controller-air");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 98,
+            observed_at_unix_ms: now - 2 * 3_600_000,
+        });
+        // Idle shared body → unreliable → prediction engages.
+        let mut system = test_system(98, 104, false, false, "off");
+        // Controller air temp is 70 °F (test_system default); much cooler than 98.
+        let weather = WeatherCache::default(); // empty → no fresh sample
+
+        estimator.apply_to_system(&mut system, &weather);
+
+        let spa = system.spa.expect("spa");
+        assert_eq!(
+            spa.prediction_basis.as_deref(),
+            Some("projected-cooling-only"),
+            "empty cache should degrade to the controller-air cooling-only tier"
+        );
+        let predicted = spa.predicted_temperature.expect("predicted temperature");
+        assert!(predicted < 98, "water should cool toward 70 °F air: {predicted}");
+        assert!(spa.temperature_display.is_predicted);
+    }
+
+    #[test]
+    fn large_mae_widens_uncertainty_band() {
+        // The persisted rolling MAE sets a floor under the surfaced ± band.
+        let path = test_store_path("prediction-mae-uncertainty");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 98,
+            observed_at_unix_ms: now - 3_600_000, // 1h gap → small heuristic band
+        });
+        estimator.store.spa_prediction_mae_f = Some(5.0); // large measured error
+        let mut system = test_system(98, 104, false, false, "off");
+        let weather = gap_weather(now, 2, 60.0);
+
+        estimator.apply_to_system(&mut system, &weather);
+
+        let spa = system.spa.expect("spa");
+        let band = spa.prediction_uncertainty_f.expect("uncertainty");
+        assert!(
+            band >= MAE_UNCERTAINTY_K * 5.0,
+            "uncertainty must honor the MAE floor: {band}"
+        );
+    }
+
+    #[test]
+    fn cooling_params_seed_from_history_cooling_interval() {
+        let path = test_store_path("cooling-seed");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let controller_now = history_time(24, 6, 0, 0);
+        let now_unix_ms = 1_700_000_000_000i64;
+        // A long heater-off circulation run with the pool slowly cooling toward
+        // a steady air temperature => a fittable cooling interval.
+        let history = HistoryData {
+            air_temps: vec![
+                TimeTempPoint {
+                    time: history_time(24, 0, 0, 0),
+                    temp: 60,
+                },
+                TimeTempPoint {
+                    time: history_time(24, 6, 0, 0),
+                    temp: 60,
+                },
+            ],
+            pool_temps: vec![
+                TimeTempPoint {
+                    time: history_time(24, 0, 30, 0),
+                    temp: 90,
+                },
+                TimeTempPoint {
+                    time: history_time(24, 1, 30, 0),
+                    temp: 87,
+                },
+                TimeTempPoint {
+                    time: history_time(24, 2, 30, 0),
+                    temp: 84,
+                },
+                TimeTempPoint {
+                    time: history_time(24, 3, 30, 0),
+                    temp: 82,
+                },
+                TimeTempPoint {
+                    time: history_time(24, 4, 30, 0),
+                    temp: 80,
+                },
+            ],
+            pool_set_point_temps: vec![],
+            spa_temps: vec![],
+            spa_set_point_temps: vec![],
+            pool_runs: vec![TimeRangePoint {
+                on: history_time(24, 0, 0, 0),
+                off: history_time(24, 5, 0, 0),
+            }],
+            spa_runs: vec![],
+            solar_runs: vec![],
+            heater_runs: vec![], // heater off the whole time => cooling
+            light_runs: vec![],
+        };
+
+        estimator.seed_cooling_params_from_history(&history, &controller_now, now_unix_ms, false);
+
+        let params = estimator
+            .store
+            .pool_cooling_params
+            .expect("cooling params seeded");
+        let tau = 1.0 / params.k0_per_hour;
+        assert!(
+            (2.0..=200.0).contains(&tau),
+            "fitted tau should be physically plausible: {tau}"
+        );
+    }
+
+    /// Fixture-replay: a synthetic but realistic 48h controller `HistoryData`
+    /// carrying a heater-OFF cooling interval (pump circulating, heater idle) is
+    /// fed through the *real* calibration path
+    /// (`seed_cooling_params_from_history` -> `fit_history_cooling` ->
+    /// `thermal::fit_cooling_params`). We assert (a) the fitted time constant is
+    /// physically plausible, and (b) the fit generalizes: projecting with the
+    /// fitted params over an independent *held-out* cooling interval keeps the
+    /// mean absolute error under threshold. Fully offline — no controller, no
+    /// live API.
+    #[test]
+    fn fixture_replay_history_fit_is_plausible_and_holds_out() {
+        // Ground-truth covered-idle physics: Newtonian relaxation toward steady
+        // outdoor air at a known time constant. Integer controller temps add
+        // realistic quantization noise to the fixture.
+        let air_f = 55.0_f64;
+        let k_true = 1.0 / 20.0; // tau = 20h, comfortably inside [2h, 200h]
+        let cooled = |start_f: f64, hours: f64| air_f + (start_f - air_f) * (-k_true * hours).exp();
+
+        let path = test_store_path("fixture-replay-history");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let controller_now = history_time(3, 0, 0, 0); // day 3, midnight
+        let now_unix_ms = 1_700_000_000_000i64;
+
+        // A single continuous 23h heater-off circulation run on day 1: the pool
+        // slowly cools, sampled hourly and rounded to whole degrees like the
+        // real controller. Monotonic, so no cross-run pairing artifacts.
+        let train_start_f = 95.0;
+        let train_hours: u16 = 23;
+        let pool_temps: Vec<TimeTempPoint> = (0..=train_hours)
+            .map(|h| TimeTempPoint {
+                time: history_time(1, h, 0, 0),
+                temp: cooled(train_start_f, h as f64).round() as i32,
+            })
+            .collect();
+
+        // Air temperature reported across the full 48h window (day 1 -> day 2).
+        let air_temps = vec![
+            TimeTempPoint {
+                time: history_time(1, 0, 0, 0),
+                temp: air_f as i32,
+            },
+            TimeTempPoint {
+                time: history_time(2, 23, 0, 0),
+                temp: air_f as i32,
+            },
+        ];
+
+        let history = HistoryData {
+            air_temps,
+            pool_temps,
+            pool_set_point_temps: vec![],
+            spa_temps: vec![],
+            spa_set_point_temps: vec![],
+            pool_runs: vec![TimeRangePoint {
+                on: history_time(1, 0, 0, 0),
+                off: history_time(1, 23, 0, 0),
+            }],
+            spa_runs: vec![],
+            solar_runs: vec![],
+            heater_runs: vec![], // heater off the whole time => cooling interval
+            light_runs: vec![],
+        };
+
+        // Run the real calibration path (weak history-interval seed).
+        estimator.seed_cooling_params_from_history(&history, &controller_now, now_unix_ms, false);
+
+        let params = estimator
+            .store
+            .pool_cooling_params
+            .expect("cooling params should be seeded from the 48h history");
+        let tau = 1.0 / params.k0_per_hour;
+        assert!(
+            (2.0..=200.0).contains(&tau),
+            "fitted tau must be physically plausible: {tau}"
+        );
+        // The fixture is a clean cooling curve; the fit should land near truth.
+        assert!(
+            (tau - 20.0).abs() < 6.0,
+            "fitted tau {tau} should be close to the ground-truth 20h"
+        );
+
+        // Hold-out generalization: an independent cooling interval (a different
+        // starting temperature) the fit never saw. Project it forward with the
+        // fitted params and compare to the ground-truth integer temperatures.
+        let holdout_start_f = 88.0;
+        let base = now_unix_ms;
+        let hour_ms = 3_600_000i64;
+        let anchor = ReliableSample {
+            temperature_f: cooled(holdout_start_f, 0.0).round(),
+            observed_at_unix_ms: base,
+        };
+        let segment = thermal::WeatherSegment {
+            start_unix_ms: base - hour_ms,
+            end_unix_ms: base + 12 * hour_ms,
+            air_temp_f: air_f,
+            wind_mph: None,
+            humidity_fraction: None,
+            cloud_fraction: None,
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
+        };
+
+        let mut total_abs_error = 0.0;
+        let holdout_steps: i64 = 10; // gaps 1..=10h all sit under the 12h cutoff
+        for h in 1..=holdout_steps {
+            let projected =
+                thermal::project_temperature(anchor, &[segment], &params, base + h * hour_ms);
+            assert_eq!(
+                projected.basis,
+                PredictionBasis::ProjectedCoolingOnly,
+                "cooling-only fixture should project on the cooling-only basis"
+            );
+            let actual = cooled(holdout_start_f, h as f64).round();
+            total_abs_error += (projected.predicted_f - actual).abs();
+        }
+        let holdout_mae = total_abs_error / holdout_steps as f64;
+        assert!(
+            holdout_mae < 1.5,
+            "held-out projection MAE {holdout_mae} °F should be under threshold"
+        );
+    }
+
+    #[test]
+    fn store_new_fields_default_and_round_trip_old_file() {
+        // An old-format store (missing every new field) must deserialize.
+        let old = r#"{
+            "pool_learned_rate_f_per_hour": 2.0,
+            "spa_learned_rate_f_per_hour": null,
+            "pool_last_reliable_temperature": null,
+            "spa_last_reliable_temperature": null,
+            "recent_sessions": []
+        }"#;
+        let store: HeatEstimatorStore = serde_json::from_str(old).expect("back-compat");
+        assert!(store.pool_cooling_intervals.is_empty());
+        assert!(store.activity_windows.is_empty());
+        assert!(store.mae_history.is_empty());
+        assert!(store.pool_outlet_offset_f.is_none());
+        assert!(store.pool_last_refit_unix_ms.is_none());
+        // And the extended store round-trips.
+        let json = serde_json::to_string(&store).expect("serialize");
+        let _: HeatEstimatorStore = serde_json::from_str(&json).expect("round-trip");
+    }
+
+    #[test]
+    fn activity_windows_recorded_on_body_off_transition_and_bounded() {
+        let mut estimator = test_estimator();
+        for i in 0..(MAX_ACTIVITY_WINDOWS + 10) {
+            let t_on = (i as i64) * 100_000;
+            estimator.test_note_activity(HeatingBodyKind::Spa, true, t_on);
+            estimator.test_note_activity(HeatingBodyKind::Spa, false, t_on + 50_000);
+        }
+        assert_eq!(estimator.store.activity_windows.len(), MAX_ACTIVITY_WINDOWS);
+        // Overlap detection: last window overlaps a gap spanning it.
+        let last = *estimator.store.activity_windows.last().unwrap();
+        assert!(estimator.activity_overlapped_gap(
+            HeatingBodyKind::Spa, last.start_unix_ms - 10, last.end_unix_ms + 10));
+        assert!(!estimator.activity_overlapped_gap(
+            HeatingBodyKind::Spa, last.end_unix_ms + 10, last.end_unix_ms + 20));
+        assert!(!estimator.activity_overlapped_gap(
+            HeatingBodyKind::Pool, last.start_unix_ms - 10, last.end_unix_ms + 10));
+    }
+
+    /// Fill the estimator with synthetic idle intervals generated from `truth`.
+    fn seed_synthetic_intervals(
+        estimator: &mut HeatEstimator,
+        body: HeatingBodyKind,
+        truth: &CoolingParams,
+        count: usize,
+    ) {
+        for i in 0..count {
+            let t0 = i as i64 * 12 * 3_600_000;
+            let t1 = t0 + 10 * 3_600_000;
+            let segs = vec![test_weather_segment(t0, t1, 60.0)];
+            let weather = crate::calibrator::bucket_weather(&segs, t0, t1);
+            let mut interval = crate::calibrator::CoolingInterval {
+                t0_unix_ms: t0, t1_unix_ms: t1, temp0_f: 95.0, temp1_f: 0.0,
+                regime: crate::calibrator::IntervalRegime::IdleCovered, weather,
+            };
+            interval.temp1_f = crate::calibrator::predict_interval_end(
+                &interval, truth, thermal::SolarSite::disabled());
+            estimator.intervals_slot_mut(body).push(interval);
+        }
+    }
+
+    #[test]
+    fn refit_applies_validated_blend_silently() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        // Current params badly wrong.
+        *estimator.cooling_params_slot_mut(HeatingBodyKind::Spa) =
+            Some(CoolingParams { k0_per_hour: 1.0 / 30.0, ..CoolingParams::seed() });
+        // Adaptation: mae_history is only appended when a rolling prediction
+        // MAE is already known (spec §10: it mirrors the closed-loop EWMA
+        // trend), which a brand-new estimator doesn't have yet. Seed one so
+        // the "mae_history recorded on accept" assertion below is meaningful.
+        *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(2.5);
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 8);
+        // Adaptation: shortly after the last seeded interval (t1 ~= 94h), not
+        // the brief's `100 * 12h` (~50 days) — with the real default
+        // `window_days` (14), that would place every synthetic interval
+        // outside the rolling fit window and the refit would no-op.
+        let now = 9 * 12 * 3_600_000;
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        let after = estimator.cooling_params(HeatingBodyKind::Spa);
+        // Moved toward truth (damped: between old 1/30 and truth 1/96).
+        assert!(after.k0_per_hour < 1.0 / 30.0);
+        assert!(after.k0_per_hour > 1.0 / 96.0);
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, Some(now));
+        assert!(!estimator.store.mae_history.is_empty());
+    }
+
+    #[test]
+    fn refit_rate_limited_by_refit_min_hours() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 8);
+        let now = 100 * 12 * 3_600_000;
+        estimator.store.spa_last_refit_unix_ms = Some(now - 3_600_000); // 1h ago < 24h
+        let before = estimator.cooling_params(HeatingBodyKind::Spa);
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert_eq!(estimator.cooling_params(HeatingBodyKind::Spa), before);
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, Some(now - 3_600_000));
+    }
+
+    #[test]
+    fn refit_needs_min_new_intervals_unless_mae_drifts() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        // 3 intervals: below the count trigger (min_new_intervals = 4) but
+        // enough for the holdout guard (window.len() >= 3), so the ONLY way
+        // past the gate is the MAE-drift branch — the count path cannot fire.
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 3);
+        // Adaptation: same reasoning as `refit_applies_validated_blend_silently`
+        // — keep `now` within the rolling `window_days` window of the seeded
+        // synthetic intervals (max t1 = 34h).
+        let now = 5 * 12 * 3_600_000;
+        let before = estimator.cooling_params(HeatingBodyKind::Spa);
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert_eq!(estimator.cooling_params(HeatingBodyKind::Spa), before, "too few intervals, no drift");
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, None, "gate must not fire on count alone");
+        // Same interval count, but now the rolling MAE has drifted past
+        // mae_drift_f: the drift branch alone must force the fit.
+        *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(5.0); // > mae_drift_f
+        estimator.maybe_refit(HeatingBodyKind::Spa, now);
+        assert!(estimator.store.spa_last_refit_unix_ms.is_some(), "drift trigger fired");
+    }
+
+    fn test_completed_session(
+        body: HeatingBodyKind,
+        started_at_unix_ms: i64,
+        ended_at_unix_ms: i64,
+        start_temp_f: f64,
+        end_temp_f: f64,
+    ) -> CompletedHeatingSession {
+        CompletedHeatingSession {
+            body,
+            started_at_unix_ms,
+            ended_at_unix_ms,
+            start_temp_f,
+            end_temp_f,
+            target_temp_f: end_temp_f,
+            average_air_temp_f: None,
+            duration_minutes: (ended_at_unix_ms - started_at_unix_ms) as f64 / 60_000.0,
+            average_rate_f_per_hour: 0.0,
+        }
+    }
+
+    #[test]
+    fn outlet_offset_and_bulk_rate_learned_from_settled_post_heat_read() {
+        let mut estimator = test_estimator();
+        // 30-min spa session: 91F -> outlet said 104F at cutoff.
+        estimator.store.recent_sessions.push(test_completed_session(
+            HeatingBodyKind::Spa, 0, 30 * 60_000, 91.0, 104.0));
+        // Settled mixed read 20 min later: true bulk 94F.
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 94.0, 50 * 60_000);
+        let offset = estimator.store.spa_outlet_offset_f.expect("offset learned");
+        assert!((offset - 10.0).abs() < 1e-9); // 104 - 94
+        let rate = estimator.store.spa_bulk_rate_f_per_hour.expect("bulk rate learned");
+        assert!((rate - 6.0).abs() < 1e-9); // (94 - 91) / 0.5h
+        // Second call for the same session is a no-op (already paired).
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 93.0, 60 * 60_000);
+        assert!((estimator.store.spa_outlet_offset_f.unwrap() - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn outlet_offset_ignores_reads_outside_settle_window() {
+        let mut estimator = test_estimator();
+        estimator.store.recent_sessions.push(test_completed_session(
+            HeatingBodyKind::Spa, 0, 30 * 60_000, 91.0, 104.0));
+        // 10 hours later (> 6h window): stale, don't pair.
+        estimator.learn_outlet_offset(HeatingBodyKind::Spa, 92.0, 10 * 3_600_000);
+        assert!(estimator.store.spa_outlet_offset_f.is_none());
+    }
+
+    #[test]
+    fn calibration_snapshot_shape() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 3);
+        let snap = estimator.calibration_snapshot(1_000_000);
+        assert_eq!(snap["as_of_unix_ms"], 1_000_000);
+        assert!(snap["enabled"].as_bool().unwrap());
+        let spa = &snap["spa"];
+        assert!(spa["params"]["tau_hours"].as_f64().unwrap() > 0.0);
+        assert_eq!(spa["interval_counts"]["idle_covered"], 3);
+        assert_eq!(spa["interval_counts"]["excluded_anomalous"], 0);
+        assert!(snap["pool"].is_object());
+        assert!(snap["mae_trend"].is_array());
+    }
+
+    #[test]
+    fn end_to_end_capture_then_refit_recovers_truth_and_excludes_anomaly() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        *estimator.cooling_params_slot_mut(HeatingBodyKind::Spa) =
+            Some(CoolingParams { k0_per_hour: 1.0 / 40.0, ..CoolingParams::seed() });
+
+        // Capture 8 clean intervals THROUGH the real capture path.
+        for i in 0..8 {
+            let t0 = i as i64 * 12 * 3_600_000;
+            let t1 = t0 + 10 * 3_600_000;
+            let segs = vec![test_weather_segment(t0, t1, 60.0)];
+            let anchor = thermal::ReliableSample { temperature_f: 95.0, observed_at_unix_ms: t0 };
+            let probe = crate::calibrator::CoolingInterval {
+                t0_unix_ms: t0, t1_unix_ms: t1, temp0_f: 95.0, temp1_f: 0.0,
+                regime: crate::calibrator::IntervalRegime::IdleCovered,
+                weather: crate::calibrator::bucket_weather(&segs, t0, t1),
+            };
+            let actual = crate::calibrator::predict_interval_end(
+                &probe, &truth, thermal::SolarSite::disabled());
+            // error vs CURRENT (wrong) params is small enough to stay IdleCovered
+            // because rolling MAE is None -> floor 0.75*3 = 2.25F... so use the
+            // real error the capture path would compute: pass a modest error.
+            estimator.capture_cooling_interval(
+                HeatingBodyKind::Spa, anchor, actual, 1.0, &segs, t1);
+        }
+        // One wild swim-loss interval: tagged anomalous, excluded from the fit.
+        let t0 = 8 * 12 * 3_600_000;
+        let segs = vec![test_weather_segment(t0, t0 + 10 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample { temperature_f: 95.0, observed_at_unix_ms: t0 };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa, anchor, 80.0, -12.0, &segs, t0 + 10 * 3_600_000);
+
+        let counts = estimator.intervals(HeatingBodyKind::Spa);
+        assert_eq!(counts.len(), 9);
+        assert_eq!(counts.iter().filter(|i|
+            i.regime == crate::calibrator::IntervalRegime::ExcludedAnomalous).count(), 1);
+
+        // Refit: moves tau from 40h toward 96h (damped single step).
+        let before = estimator.cooling_params(HeatingBodyKind::Spa).k0_per_hour;
+        estimator.maybe_refit(HeatingBodyKind::Spa, t0 + 11 * 3_600_000);
+        let after = estimator.cooling_params(HeatingBodyKind::Spa).k0_per_hour;
+        assert!(after < before, "tau must move toward the (slower) truth");
+    }
+
+    // ── write-generation ordering (offloaded persists can't clobber a newer
+    // snapshot; see `write_json_off_lock`) ─────────────────────────────────
+
+    #[test]
+    fn write_generation_prefers_newest() {
+        // In-order: gen 1 commits, then gen 2 (newer) commits — normal case.
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 1));
+        assert_eq!(last_written, 1);
+        assert!(should_commit_write(&mut last_written, 2));
+        assert_eq!(last_written, 2);
+    }
+
+    #[test]
+    fn write_generation_skips_stale_out_of_order_write() {
+        // Out-of-order: gen 2 (newer, e.g. `maybe_refit`'s persist) commits
+        // first, then gen 1 (older, e.g. `calibrate_body`'s persist) arrives
+        // late — it must be skipped rather than clobbering the newer state.
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 2));
+        assert_eq!(last_written, 2);
+        assert!(
+            !should_commit_write(&mut last_written, 1),
+            "a stale, older-generation write must not commit over a newer one"
+        );
+        // The last-committed generation is unchanged by the skipped write.
+        assert_eq!(last_written, 2);
+    }
+
+    #[test]
+    fn write_generation_rejects_duplicate_and_keeps_advancing() {
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 5));
+        // Re-delivering the same generation must not re-commit.
+        assert!(!should_commit_write(&mut last_written, 5));
+        assert_eq!(last_written, 5);
+        assert!(should_commit_write(&mut last_written, 6));
+        assert_eq!(last_written, 6);
+    }
+
+    #[test]
+    fn assign_write_generation_is_monotonic_per_path() {
+        let path_a = test_store_path("write-gen-a");
+        let path_b = test_store_path("write-gen-b");
+
+        assert_eq!(assign_write_generation(&path_a), 1);
+        assert_eq!(assign_write_generation(&path_a), 2);
+        // A different path gets its own independent counter.
+        assert_eq!(assign_write_generation(&path_b), 1);
+        assert_eq!(assign_write_generation(&path_a), 3);
     }
 }

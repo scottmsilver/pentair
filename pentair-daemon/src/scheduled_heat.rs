@@ -581,6 +581,8 @@ mod tests {
             Default::default(),
             Default::default(),
             std::path::PathBuf::from("/tmp/test-heat-estimator.json"),
+            std::path::PathBuf::from("/tmp/test-weather-cache.json"),
+            None,
         );
         let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(1);
         (shared, cmd_tx)
