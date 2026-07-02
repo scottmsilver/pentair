@@ -12,7 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::thermal::{SolarSite, WeatherSegment};
+use crate::thermal::{self, CoolingParams, SolarSite, WeatherSegment};
 
 /// Hard cap on weather buckets stored per interval (spec §11): hourly buckets,
 /// widened (never truncated) when the gap exceeds 24h, so the store stays small
@@ -106,6 +106,91 @@ pub fn interval_segments(interval: &CoolingInterval, site: SolarSite) -> Vec<Wea
         .collect()
 }
 
+/// Tau clamps for the interval fit, matching thermal.rs's documented [2h, 200h].
+const FIT_TAU_MIN_HOURS: f64 = 2.0;
+const FIT_TAU_MAX_HOURS: f64 = 200.0;
+/// Solar-gain grid ceiling (°F/h per kW/m²) when g is observable.
+const FIT_G_MAX: f64 = 1.5;
+/// End-temp shift (°F) that makes solar observable in a window (spec §6).
+const SOLAR_OBSERVABLE_DELTA_F: f64 = 0.2;
+
+/// Relax the interval's start temperature across its own weather buckets.
+pub fn predict_interval_end(interval: &CoolingInterval, params: &CoolingParams, site: SolarSite) -> f64 {
+    let mut water = interval.temp0_f;
+    for seg in interval_segments(interval, site) {
+        let dt_hours = (seg.end_unix_ms - seg.start_unix_ms) as f64 / MS_PER_HOUR as f64;
+        if dt_hours > 0.0 {
+            water = thermal::passive_relax_over_segment(water, &seg, params, dt_hours);
+        }
+    }
+    water
+}
+
+/// Mean absolute end-temperature error of `params` across `intervals`.
+pub fn score_params(intervals: &[&CoolingInterval], params: &CoolingParams, site: SolarSite) -> f64 {
+    if intervals.is_empty() {
+        return f64::NAN;
+    }
+    let sum: f64 = intervals
+        .iter()
+        .map(|i| (predict_interval_end(i, params, site) - i.temp1_f).abs())
+        .sum();
+    sum / intervals.len() as f64
+}
+
+/// True when the window can identify `solar_gain_f`: bumping g materially moves
+/// at least one interval's predicted end temp (i.e., the window contains real
+/// daytime irradiance). Uses only public thermal API — no geometry duplicated.
+pub fn solar_observable(intervals: &[&CoolingInterval], seed: &CoolingParams, site: SolarSite) -> bool {
+    let bumped = CoolingParams { solar_gain_f: seed.solar_gain_f + 0.5, ..*seed };
+    intervals.iter().any(|i| {
+        (predict_interval_end(i, &bumped, site) - predict_interval_end(i, seed, site)).abs()
+            > SOLAR_OBSERVABLE_DELTA_F
+    })
+}
+
+/// Grid-fit `k0` (and `g` when observable) minimizing summed squared end-temp
+/// error. Evaporation coefficients are HELD at the seed (spec §6: covered-idle
+/// evap stays pulled toward its current value — re-fitting it here is how the
+/// double-count bug happened). Returns the seed untouched when `intervals` is
+/// empty. Never returns non-finite params.
+pub fn fit_intervals(intervals: &[&CoolingInterval], seed: &CoolingParams, site: SolarSite) -> CoolingParams {
+    if intervals.is_empty() {
+        return *seed;
+    }
+    let fit_g = solar_observable(intervals, seed, site);
+    let g_grid: Vec<f64> = if fit_g {
+        (0..=15).map(|i| i as f64 * FIT_G_MAX / 15.0).collect()
+    } else {
+        vec![seed.solar_gain_f]
+    };
+    // 60 log-spaced k0 candidates across tau [2h, 200h].
+    let (k_lo, k_hi) = (1.0 / FIT_TAU_MAX_HOURS, 1.0 / FIT_TAU_MIN_HOURS);
+    let k_grid: Vec<f64> = (0..60)
+        .map(|i| k_lo * (k_hi / k_lo).powf(i as f64 / 59.0))
+        .collect();
+
+    let mut best = *seed;
+    let mut best_sse = f64::INFINITY;
+    for &k0 in &k_grid {
+        for &g in &g_grid {
+            let candidate = CoolingParams { k0_per_hour: k0, solar_gain_f: g, ..*seed };
+            let sse: f64 = intervals
+                .iter()
+                .map(|i| {
+                    let e = predict_interval_end(i, &candidate, site) - i.temp1_f;
+                    e * e
+                })
+                .sum();
+            if sse.is_finite() && sse < best_sse {
+                best_sse = sse;
+                best = candidate;
+            }
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +253,73 @@ mod tests {
         assert_eq!(out.len(), interval.weather.len());
         assert_eq!(out[0].latitude_deg, 37.35);
         assert_eq!(out[0].air_temp_f, 55.0);
+    }
+
+    use crate::thermal::CoolingParams;
+
+    fn params(k0: f64, g: f64) -> CoolingParams {
+        CoolingParams {
+            k0_per_hour: k0,
+            k_wind_per_hour_per_mph: 0.0,
+            evap_a: 0.0,
+            evap_b: 0.0,
+            solar_gain_f: g,
+            max_projection_hours: 48.0,
+        }
+    }
+
+    /// Build a synthetic interval whose end temp comes from the true params.
+    fn synth_interval(t0_h: i64, hours: i64, temp0: f64, air: f64, truth: &CoolingParams) -> CoolingInterval {
+        let segs = vec![seg(t0_h, t0_h + hours, air)];
+        let weather = bucket_weather(&segs, t0_h * 3_600_000, (t0_h + hours) * 3_600_000);
+        let mut interval = CoolingInterval {
+            t0_unix_ms: t0_h * 3_600_000,
+            t1_unix_ms: (t0_h + hours) * 3_600_000,
+            temp0_f: temp0,
+            temp1_f: 0.0,
+            regime: IntervalRegime::IdleCovered,
+            weather,
+        };
+        interval.temp1_f = predict_interval_end(&interval, truth, SolarSite::disabled());
+        interval
+    }
+
+    #[test]
+    fn fit_recovers_known_k0_from_synthetic_intervals() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let intervals: Vec<CoolingInterval> = (0..8)
+            .map(|i| synth_interval(i * 12, 10, 95.0 - i as f64, 60.0, &truth))
+            .collect();
+        let refs: Vec<&CoolingInterval> = intervals.iter().collect();
+        let seed = params(1.0 / 50.0, 0.0);
+        let fit = fit_intervals(&refs, &seed, SolarSite::disabled());
+        let tau = 1.0 / fit.k0_per_hour;
+        assert!((tau - 96.0).abs() < 12.0, "recovered tau {tau} should be near 96h");
+        // evap held at seed, never fit.
+        assert_eq!(fit.evap_a, seed.evap_a);
+        assert_eq!(fit.evap_b, seed.evap_b);
+    }
+
+    #[test]
+    fn night_only_windows_hold_solar_gain_at_seed() {
+        // Disabled site -> zero irradiance everywhere -> g unobservable.
+        let truth = params(1.0 / 96.0, 0.0);
+        let intervals: Vec<CoolingInterval> =
+            (0..4).map(|i| synth_interval(i * 12, 10, 95.0, 60.0, &truth)).collect();
+        let refs: Vec<&CoolingInterval> = intervals.iter().collect();
+        let seed = params(1.0 / 50.0, 0.9);
+        assert!(!solar_observable(&refs, &seed, SolarSite::disabled()));
+        let fit = fit_intervals(&refs, &seed, SolarSite::disabled());
+        assert_eq!(fit.solar_gain_f, seed.solar_gain_f, "g must stay at seed when unobservable");
+    }
+
+    #[test]
+    fn score_params_is_mae_over_endpoints() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let interval = synth_interval(0, 10, 95.0, 60.0, &truth);
+        let refs = [&interval];
+        assert!(score_params(&refs, &truth, SolarSite::disabled()) < 1e-9);
+        let wrong = params(1.0 / 10.0, 0.0);
+        assert!(score_params(&refs, &wrong, SolarSite::disabled()) > 0.5);
     }
 }
