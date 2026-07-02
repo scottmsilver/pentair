@@ -72,6 +72,10 @@ pub fn router(
         // savings. GET only — it never actuates, writes a setpoint, or issues a
         // command. See `get_heat_plan`.
         .route("/api/pool/heat-plan", get(get_heat_plan))
+        // Advisory / READ-ONLY: current calibrator state (fitted params, MAE,
+        // interval counts). GET only — no actuation, no writes. See
+        // `get_calibration`.
+        .route("/api/pool/calibration", get(get_calibration))
         .route("/api/pool/on", post(pool_on))
         .route("/api/pool/off", post(pool_off))
         .route("/api/pool/heat", post(pool_heat))
@@ -328,6 +332,19 @@ async fn get_heat_plan(State(state): State<AppState>) -> Json<serde_json::Value>
         "all_comfort_met": report.all_comfort_met(),
         "summary": report.summary,
     }))
+}
+
+// ── Calibration snapshot (READ-ONLY — never actuates) ────────────────────
+//
+/// GET /api/pool/calibration — read-only calibrator state (advisory; spec §10).
+/// Actuates nothing: read lock + snapshot, no command channel access.
+async fn get_calibration(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let shared = state.shared.read().await;
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    Json(shared.heat.calibration_snapshot(now_unix_ms))
 }
 
 async fn get_status(State(state): State<AppState>) -> Json<serde_json::Value> {

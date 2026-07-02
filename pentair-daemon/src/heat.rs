@@ -1968,6 +1968,60 @@ impl HeatEstimator {
             && telemetry.heat_mode != "off"
             && telemetry.setpoint_f > telemetry.temperature_f
     }
+
+    /// Read-only calibration state for GET /api/pool/calibration (spec §10).
+    /// Current state only — no change history exists by design (spec §7).
+    pub fn calibration_snapshot(&self, now_unix_ms: i64) -> serde_json::Value {
+        let body_json = |body: HeatingBodyKind| {
+            let params = self.cooling_params(body);
+            let intervals = self.intervals(body);
+            let idle = intervals
+                .iter()
+                .filter(|i| i.regime == crate::calibrator::IntervalRegime::IdleCovered)
+                .count();
+            let excluded = intervals.len() - idle;
+            let exclusion_window_start = now_unix_ms
+                - (self.config.calibration.exclusion_window_days * 24.0 * 3_600_000.0) as i64;
+            let (last_refit, offset, bulk_rate) = match body {
+                HeatingBodyKind::Pool => (
+                    self.store.pool_last_refit_unix_ms,
+                    self.store.pool_outlet_offset_f,
+                    self.store.pool_bulk_rate_f_per_hour,
+                ),
+                HeatingBodyKind::Spa => (
+                    self.store.spa_last_refit_unix_ms,
+                    self.store.spa_outlet_offset_f,
+                    self.store.spa_bulk_rate_f_per_hour,
+                ),
+            };
+            serde_json::json!({
+                "params": {
+                    "tau_hours": 1.0 / params.k0_per_hour,
+                    "k0_per_hour": params.k0_per_hour,
+                    "k_wind_per_hour_per_mph": params.k_wind_per_hour_per_mph,
+                    "evap_a": params.evap_a,
+                    "evap_b": params.evap_b,
+                    "solar_gain_f": params.solar_gain_f,
+                },
+                "rolling_mae_f": self.prediction_mae(body),
+                "last_refit_unix_ms": last_refit,
+                "outlet_offset_f": offset,
+                "bulk_rate_f_per_hour": bulk_rate,
+                "interval_counts": { "idle_covered": idle, "excluded_anomalous": excluded },
+                "exclusion_rate_recent":
+                    crate::calibrator::exclusion_rate(intervals, exclusion_window_start),
+            })
+        };
+        serde_json::json!({
+            "as_of_unix_ms": now_unix_ms,
+            "enabled": self.config.calibration.enabled,
+            "pool": body_json(HeatingBodyKind::Pool),
+            "spa": body_json(HeatingBodyKind::Spa),
+            "mae_trend": self.store.mae_history.iter().map(|p| serde_json::json!({
+                "body": p.body, "at_unix_ms": p.at_unix_ms, "mae_f": p.mae_f,
+            })).collect::<Vec<_>>(),
+        })
+    }
 }
 
 impl BodyTelemetry {
@@ -3539,5 +3593,21 @@ mod tests {
         // 10 hours later (> 6h window): stale, don't pair.
         estimator.learn_outlet_offset(HeatingBodyKind::Spa, 92.0, 10 * 3_600_000);
         assert!(estimator.store.spa_outlet_offset_f.is_none());
+    }
+
+    #[test]
+    fn calibration_snapshot_shape() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 3);
+        let snap = estimator.calibration_snapshot(1_000_000);
+        assert_eq!(snap["as_of_unix_ms"], 1_000_000);
+        assert!(snap["enabled"].as_bool().unwrap());
+        let spa = &snap["spa"];
+        assert!(spa["params"]["tau_hours"].as_f64().unwrap() > 0.0);
+        assert_eq!(spa["interval_counts"]["idle_covered"], 3);
+        assert_eq!(spa["interval_counts"]["excluded_anomalous"], 0);
+        assert!(snap["pool"].is_object());
+        assert!(snap["mae_trend"].is_array());
     }
 }
