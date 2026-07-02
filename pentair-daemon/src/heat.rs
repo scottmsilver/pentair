@@ -341,7 +341,18 @@ fn sanitize_store(store: &mut HeatEstimatorStore) {
                 && interval.temp1_f.is_finite()
                 && interval.t1_unix_ms > interval.t0_unix_ms
                 && sane_ts(interval.t0_unix_ms)
-                && sane_ts(interval.t1_unix_ms);
+                && sane_ts(interval.t1_unix_ms)
+                // Bucket timestamps feed ms/hour arithmetic during refit
+                // (predict_interval_end); a hand-edited store with sane
+                // interval endpoints but wild bucket times could still
+                // overflow it, so require every bucket to sit inside the
+                // interval and be well-ordered.
+                && interval.weather.iter().all(|b| {
+                    b.end_unix_ms > b.start_unix_ms
+                        && b.start_unix_ms >= interval.t0_unix_ms
+                        && b.end_unix_ms <= interval.t1_unix_ms
+                        && b.air_temp_f.is_finite()
+                });
             if ok && interval.weather.len() > crate::calibrator::MAX_BUCKETS_PER_INTERVAL {
                 interval
                     .weather
