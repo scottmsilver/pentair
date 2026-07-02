@@ -314,6 +314,81 @@ pub struct HeatEstimator {
     solar_location: Option<(f64, f64)>,
 }
 
+/// Upper sanity bound on persisted epoch-ms timestamps (year 2100). A
+/// hand-edited or corrupted store can contain arbitrary values; anything
+/// outside `(0, MAX_SANE_UNIX_MS)` is treated as garbage rather than fed into
+/// ms/hour arithmetic that can overflow.
+const MAX_SANE_UNIX_MS: i64 = 4_102_444_800_000;
+
+/// Re-enforce the same caps + sanity bounds on a freshly-deserialized store
+/// that the daemon's own write paths already enforce at runtime. `serde` only
+/// validates shape, not size or content, so a hand-edited or otherwise
+/// corrupted `heat-estimator.json` can otherwise carry unbounded vectors or
+/// extreme timestamps straight past every in-memory cap. Called once,
+/// immediately after a successful deserialize, before the store is used.
+fn sanitize_store(store: &mut HeatEstimatorStore) {
+    let sane_ts = |ms: i64| ms > 0 && ms < MAX_SANE_UNIX_MS;
+
+    let mut dropped_intervals = 0usize;
+    let mut truncated_weather = 0usize;
+    for intervals in [
+        &mut store.pool_cooling_intervals,
+        &mut store.spa_cooling_intervals,
+    ] {
+        let before = intervals.len();
+        intervals.retain_mut(|interval| {
+            let ok = interval.temp0_f.is_finite()
+                && interval.temp1_f.is_finite()
+                && interval.t1_unix_ms > interval.t0_unix_ms
+                && sane_ts(interval.t0_unix_ms)
+                && sane_ts(interval.t1_unix_ms);
+            if ok && interval.weather.len() > crate::calibrator::MAX_BUCKETS_PER_INTERVAL {
+                interval
+                    .weather
+                    .truncate(crate::calibrator::MAX_BUCKETS_PER_INTERVAL);
+                truncated_weather += 1;
+            }
+            ok
+        });
+        let len = intervals.len();
+        if len > MAX_INTERVALS_PER_BODY {
+            intervals.drain(..len - MAX_INTERVALS_PER_BODY);
+        }
+        dropped_intervals += before - intervals.len();
+    }
+
+    let before = store.activity_windows.len();
+    store
+        .activity_windows
+        .retain(|w| sane_ts(w.start_unix_ms) && sane_ts(w.end_unix_ms));
+    let len = store.activity_windows.len();
+    if len > MAX_ACTIVITY_WINDOWS {
+        store.activity_windows.drain(..len - MAX_ACTIVITY_WINDOWS);
+    }
+    let dropped_windows = before - store.activity_windows.len();
+
+    let before = store.mae_history.len();
+    store
+        .mae_history
+        .retain(|p| sane_ts(p.at_unix_ms) && p.mae_f.is_finite());
+    let len = store.mae_history.len();
+    if len > MAX_MAE_POINTS {
+        store.mae_history.drain(..len - MAX_MAE_POINTS);
+    }
+    let dropped_mae = before - store.mae_history.len();
+
+    if dropped_intervals > 0 || truncated_weather > 0 || dropped_windows > 0 || dropped_mae > 0 {
+        warn!(
+            dropped_intervals,
+            truncated_weather,
+            dropped_windows,
+            dropped_mae,
+            "heat estimator: sanitized malformed persisted store (hand-edited or corrupted \
+             heat-estimator.json?)"
+        );
+    }
+}
+
 impl HeatEstimator {
     #[cfg(test)]
     pub fn load(config: HeatingConfig, path: PathBuf) -> Self {
@@ -354,6 +429,7 @@ impl HeatEstimator {
             HeatEstimatorStore::default()
         };
         let mut store = store;
+        sanitize_store(&mut store);
         store.seed_last_reliable_from_recent_sessions();
 
         info!(
@@ -2349,13 +2425,71 @@ fn unix_time_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// Per-path write ordering for [`write_json_off_lock`]: `(next_gen_to_assign,
+/// last_written_gen)`. Offloaded writes to the same path can complete out of
+/// order (e.g. `calibrate_body` persists, then `maybe_refit` persists a newer
+/// accepted fit, but the older write's blocking task happens to finish last);
+/// without this, the stale write can clobber the newer snapshot on disk even
+/// though in-memory state stays correct. Keyed by path since the estimator
+/// only ever persists one file today, but nothing prevents more callers.
+static WRITE_GENERATIONS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, u64)>>,
+> = std::sync::OnceLock::new();
+
+fn write_generations() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, u64)>>
+{
+    WRITE_GENERATIONS.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Claims the next write-generation for `path`, incrementing the counter.
+/// Called synchronously at persist time, before the write is offloaded, so
+/// generations are assigned in the same order callers logically intended.
+fn assign_write_generation(path: &PathBuf) -> u64 {
+    let mut map = write_generations().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = map.entry(path.clone()).or_insert((1, 0));
+    let gen = entry.0;
+    entry.0 += 1;
+    gen
+}
+
+/// Pure decision: should generation `my_gen` actually be committed given the
+/// last-committed generation for its path? If so, records it as committed.
+/// Pulled out of `write_json_off_lock` so the ordering logic is unit-testable
+/// without touching the filesystem.
+fn should_commit_write(last_written: &mut u64, my_gen: u64) -> bool {
+    if my_gen > *last_written {
+        *last_written = my_gen;
+        true
+    } else {
+        false
+    }
+}
+
 /// Write `json` to `path` without blocking the async worker while the shared
 /// state lock is held. When a Tokio runtime is available the synchronous
 /// filesystem write is offloaded to a blocking thread (atomic temp-file +
 /// rename, so a reader never sees a torn file); otherwise — e.g. unit tests with
 /// no runtime — it is written inline so behaviour stays deterministic.
+///
+/// Generation-ordered per path (see [`WRITE_GENERATIONS`]): if an offloaded
+/// write for this path with a *newer* generation has already committed by the
+/// time this one runs, this write is skipped rather than clobbering it. The
+/// check-write-record sequence happens under one lock hold, serializing
+/// writers to the same path — acceptable since these are small files.
 fn write_json_off_lock(path: PathBuf, json: String, label: &'static str) {
+    let my_gen = assign_write_generation(&path);
     let write = move || {
+        let mut map = write_generations().lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(path.clone()).or_insert((1, 0));
+        if !should_commit_write(&mut entry.1, my_gen) {
+            debug!(
+                gen = my_gen,
+                last_written = entry.1,
+                "heat estimator: skipping stale offloaded write for {}",
+                label
+            );
+            return;
+        }
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -3152,6 +3286,134 @@ mod tests {
         );
     }
 
+    /// A hand-edited/corrupted `heat-estimator.json` bypasses every cap and
+    /// invariant the daemon's own write paths enforce. `load_with_notifications`
+    /// must sanitize it on the way in: cap each Vec (keeping the newest
+    /// entries), truncate per-interval weather to `MAX_BUCKETS_PER_INTERVAL`
+    /// (keeping the earliest — chronological), and drop entries with
+    /// non-finite temperatures, non-positive-duration intervals, or
+    /// timestamps outside a sane epoch-ms range.
+    #[test]
+    fn load_sanitizes_malformed_persisted_store() {
+        let path = test_store_path("malformed-store-sanitize");
+
+        // Year-9999 in epoch-ms — well past the sane upper bound.
+        const YEAR_9999_MS: i64 = 253_402_300_800_000;
+
+        let bucket = |t0: i64, i: i64| {
+            format!(
+                r#"{{"start_unix_ms":{s},"end_unix_ms":{e},"air_temp_f":60.0,"wind_mph":null,"humidity_fraction":null,"cloud_fraction":null}}"#,
+                s = t0 + i * 60_000,
+                e = t0 + (i + 1) * 60_000,
+            )
+        };
+        let weather_json = |t0: i64| (0..50).map(|i| bucket(t0, i)).collect::<Vec<_>>().join(",");
+
+        // 300 pool cooling intervals (cap is 200), each carrying 50 weather
+        // buckets (cap per-interval is 24). Three are deliberately special:
+        //   i=0: temp0_f is a huge-but-parseable JSON number (`1e300`). JSON
+        //        has no `NaN`/`Infinity` literal and serde_json errors out
+        //        ("number out of range") on an f64 literal like `1e999` that
+        //        can't even parse — so this instead proves a huge finite
+        //        value round-trips through deserialize without panicking or
+        //        forcing pathological allocation; it is NOT itself invalid
+        //        (`is_finite()` is true), so it must survive sanitization.
+        //   i=1: t1_unix_ms <= t0_unix_ms (non-positive-duration interval) —
+        //        must be dropped.
+        //   i=2: t1_unix_ms lands in the year 9999 (outside the sane range)
+        //        — must be dropped.
+        let mut intervals = Vec::new();
+        for i in 0..300i64 {
+            let t0 = i * 3_600_000;
+            let mut t1 = t0 + 3_600_000;
+            let mut temp0 = "90.0".to_string();
+            if i == 0 {
+                temp0 = "1e300".to_string();
+            }
+            if i == 1 {
+                t1 = t0;
+            }
+            if i == 2 {
+                t1 = YEAR_9999_MS;
+            }
+            intervals.push(format!(
+                r#"{{"t0_unix_ms":{t0},"t1_unix_ms":{t1},"temp0_f":{temp0},"temp1_f":85.0,"regime":"IdleCovered","weather":[{w}]}}"#,
+                w = weather_json(t0),
+            ));
+        }
+
+        // 300 activity windows (cap is 200); one has an out-of-range end.
+        let mut windows = Vec::new();
+        for i in 0..300i64 {
+            let start = i * 1_800_000;
+            let end = if i == 0 { YEAR_9999_MS } else { start + 900_000 };
+            windows.push(format!(
+                r#"{{"body":"Pool","start_unix_ms":{start},"end_unix_ms":{end}}}"#
+            ));
+        }
+
+        // 200 MAE points (cap is 100); one has an out-of-range timestamp.
+        let mut mae_points = Vec::new();
+        for i in 0..200i64 {
+            let at = if i == 0 { YEAR_9999_MS } else { i * 3_600_000 };
+            mae_points.push(format!(r#"{{"body":"Pool","at_unix_ms":{at},"mae_f":1.5}}"#));
+        }
+
+        let json = format!(
+            r#"{{
+                "pool_learned_rate_f_per_hour": null,
+                "spa_learned_rate_f_per_hour": null,
+                "pool_last_reliable_temperature": null,
+                "spa_last_reliable_temperature": null,
+                "recent_sessions": [],
+                "pool_cooling_intervals": [{intervals}],
+                "spa_cooling_intervals": [],
+                "activity_windows": [{windows}],
+                "mae_history": [{mae}]
+            }}"#,
+            intervals = intervals.join(","),
+            windows = windows.join(","),
+            mae = mae_points.join(","),
+        );
+        std::fs::write(&path, json).expect("write malformed store fixture");
+
+        let estimator = HeatEstimator::load(test_config(), path);
+
+        assert!(
+            !estimator.store.pool_cooling_intervals.is_empty(),
+            "all intervals were dropped — sanitizer too aggressive"
+        );
+        assert!(
+            estimator.store.pool_cooling_intervals.len() <= MAX_INTERVALS_PER_BODY,
+            "intervals not capped: {}",
+            estimator.store.pool_cooling_intervals.len()
+        );
+        for interval in &estimator.store.pool_cooling_intervals {
+            assert!(interval.temp0_f.is_finite());
+            assert!(interval.temp1_f.is_finite());
+            assert!(interval.t1_unix_ms > interval.t0_unix_ms);
+            assert!(interval.t0_unix_ms > 0 && interval.t0_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(interval.t1_unix_ms > 0 && interval.t1_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(
+                interval.weather.len() <= crate::calibrator::MAX_BUCKETS_PER_INTERVAL,
+                "weather not truncated: {}",
+                interval.weather.len()
+            );
+        }
+
+        assert!(estimator.store.activity_windows.len() <= MAX_ACTIVITY_WINDOWS);
+        for w in &estimator.store.activity_windows {
+            assert!(w.start_unix_ms > 0 && w.start_unix_ms < MAX_SANE_UNIX_MS);
+            assert!(w.end_unix_ms > 0 && w.end_unix_ms < MAX_SANE_UNIX_MS);
+        }
+
+        assert!(estimator.store.mae_history.len() <= MAX_MAE_POINTS);
+        for p in &estimator.store.mae_history {
+            assert!(p.mae_f.is_finite());
+            assert!(p.at_unix_ms > 0 && p.at_unix_ms < MAX_SANE_UNIX_MS);
+        }
+    }
+
     #[test]
     fn active_warmup_body_gets_no_cooling_projection() {
         // Idle guard: a body that is on + active but unreliable (sensor warmup)
@@ -3654,5 +3916,57 @@ mod tests {
         estimator.maybe_refit(HeatingBodyKind::Spa, t0 + 11 * 3_600_000);
         let after = estimator.cooling_params(HeatingBodyKind::Spa).k0_per_hour;
         assert!(after < before, "tau must move toward the (slower) truth");
+    }
+
+    // ── write-generation ordering (offloaded persists can't clobber a newer
+    // snapshot; see `write_json_off_lock`) ─────────────────────────────────
+
+    #[test]
+    fn write_generation_prefers_newest() {
+        // In-order: gen 1 commits, then gen 2 (newer) commits — normal case.
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 1));
+        assert_eq!(last_written, 1);
+        assert!(should_commit_write(&mut last_written, 2));
+        assert_eq!(last_written, 2);
+    }
+
+    #[test]
+    fn write_generation_skips_stale_out_of_order_write() {
+        // Out-of-order: gen 2 (newer, e.g. `maybe_refit`'s persist) commits
+        // first, then gen 1 (older, e.g. `calibrate_body`'s persist) arrives
+        // late — it must be skipped rather than clobbering the newer state.
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 2));
+        assert_eq!(last_written, 2);
+        assert!(
+            !should_commit_write(&mut last_written, 1),
+            "a stale, older-generation write must not commit over a newer one"
+        );
+        // The last-committed generation is unchanged by the skipped write.
+        assert_eq!(last_written, 2);
+    }
+
+    #[test]
+    fn write_generation_rejects_duplicate_and_keeps_advancing() {
+        let mut last_written = 0u64;
+        assert!(should_commit_write(&mut last_written, 5));
+        // Re-delivering the same generation must not re-commit.
+        assert!(!should_commit_write(&mut last_written, 5));
+        assert_eq!(last_written, 5);
+        assert!(should_commit_write(&mut last_written, 6));
+        assert_eq!(last_written, 6);
+    }
+
+    #[test]
+    fn assign_write_generation_is_monotonic_per_path() {
+        let path_a = test_store_path("write-gen-a");
+        let path_b = test_store_path("write-gen-b");
+
+        assert_eq!(assign_write_generation(&path_a), 1);
+        assert_eq!(assign_write_generation(&path_a), 2);
+        // A different path gets its own independent counter.
+        assert_eq!(assign_write_generation(&path_b), 1);
+        assert_eq!(assign_write_generation(&path_a), 3);
     }
 }
