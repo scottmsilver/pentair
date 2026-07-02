@@ -51,6 +51,10 @@ const MIN_K0_STEP: f64 = 1.0e-6;
 /// Hard cap on stored calibrator cooling intervals per body (spec-driven; see
 /// `crate::calibrator`), so the store stays bounded on long-running installs.
 const MAX_INTERVALS_PER_BODY: usize = 200;
+/// Residual beyond ANOMALY_SIGMA * max(rolling MAE, floor) tags the interval
+/// ExcludedAnomalous (spec §3 uncovered/in-use heuristic).
+const ANOMALY_SIGMA: f64 = 3.0;
+const ANOMALY_MAE_FLOOR_F: f64 = 0.75;
 /// Hard cap on stored body-activity windows (pump/body on->off transitions).
 const MAX_ACTIVITY_WINDOWS: usize = 200;
 /// Hard cap on stored rolling-MAE history points.
@@ -1470,6 +1474,52 @@ impl HeatEstimator {
         })
     }
 
+    /// Capture one classified cooling interval (spec §3, §11). The caller has
+    /// already established the gap is heater-free and the endpoint reading is
+    /// trusted; this adds the whole-gap pump/body-activity check, classifies
+    /// the residual, and stores a bounded, self-contained interval.
+    fn capture_cooling_interval(
+        &mut self,
+        body: HeatingBodyKind,
+        anchor: thermal::ReliableSample,
+        actual_f: f64,
+        error_f: f64,
+        segments: &[thermal::WeatherSegment],
+        now_unix_ms: i64,
+    ) {
+        if !self.config.calibration.enabled {
+            return;
+        }
+        if self.activity_overlapped_gap(body, anchor.observed_at_unix_ms, now_unix_ms) {
+            return; // the gap wasn't idle end-to-end — not a cooling interval
+        }
+        let weather =
+            crate::calibrator::bucket_weather(segments, anchor.observed_at_unix_ms, now_unix_ms);
+        if weather.is_empty() {
+            return; // no weather spanned the gap — interval is unusable
+        }
+        let scale = self.prediction_mae(body).unwrap_or(0.0).max(ANOMALY_MAE_FLOOR_F);
+        let regime = if error_f.abs() > ANOMALY_SIGMA * scale {
+            crate::calibrator::IntervalRegime::ExcludedAnomalous
+        } else {
+            crate::calibrator::IntervalRegime::IdleCovered
+        };
+        let interval = crate::calibrator::CoolingInterval {
+            t0_unix_ms: anchor.observed_at_unix_ms,
+            t1_unix_ms: now_unix_ms,
+            temp0_f: anchor.temperature_f,
+            temp1_f: actual_f,
+            regime,
+            weather,
+        };
+        let buffer = self.intervals_slot_mut(body);
+        buffer.push(interval);
+        let len = buffer.len();
+        if len > MAX_INTERVALS_PER_BODY {
+            buffer.drain(..len - MAX_INTERVALS_PER_BODY);
+        }
+    }
+
     /// Closed-loop calibration (primary). When a body yields a fresh post-warmup
     /// reliable reading after a sensing gap, compare it to what the predictor
     /// would have said for this instant, fold the residual into a rolling MAE,
@@ -1560,6 +1610,9 @@ impl HeatEstimator {
             }
             None => error_f.abs(),
         });
+
+        // Persist the classified interval for the slow re-fit loop (spec §4.2).
+        self.capture_cooling_interval(body, anchor, actual_f, error_f, &segments, now_unix_ms);
 
         // Damped secant step on k0 to drive the residual toward zero.
         let bumped = CoolingParams {
@@ -2673,6 +2726,23 @@ mod tests {
         weather
     }
 
+    /// A single full-weather `WeatherSegment` spanning `[start_ms, end_ms)`,
+    /// with a disabled solar site so `capture_cooling_interval` tests don't
+    /// need real geometry.
+    fn test_weather_segment(start_ms: i64, end_ms: i64, air_f: f64) -> WeatherSegment {
+        WeatherSegment {
+            start_unix_ms: start_ms,
+            end_unix_ms: end_ms,
+            air_temp_f: air_f,
+            wind_mph: Some(0.0),
+            humidity_fraction: Some(0.6),
+            cloud_fraction: Some(0.0),
+            latitude_deg: 0.0,
+            longitude_deg: 0.0,
+            cover_solar_transmission: 0.0,
+        }
+    }
+
     #[test]
     fn unreliable_shared_body_gets_weather_prediction() {
         let path = test_store_path("prediction-wiring");
@@ -2774,6 +2844,98 @@ mod tests {
         assert!(
             estimator.store.spa_prediction_mae_f.is_none(),
             "a heater run overlapping the gap must skip calibration (no MAE update)"
+        );
+    }
+
+    #[test]
+    fn capture_stores_idle_interval_and_tags_anomalies() {
+        let mut estimator = test_estimator();
+        let segs = vec![test_weather_segment(0, 20 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample {
+            temperature_f: 90.0,
+            observed_at_unix_ms: 0,
+        };
+        // Normal residual -> IdleCovered.
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor,
+            89.0,
+            0.3,
+            &segs,
+            10 * 3_600_000,
+        );
+        assert_eq!(estimator.intervals(HeatingBodyKind::Spa).len(), 1);
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Spa)[0].regime,
+            crate::calibrator::IntervalRegime::IdleCovered
+        );
+        // Huge residual (way past 3 * max(mae, 0.75)) -> ExcludedAnomalous.
+        let anchor2 = thermal::ReliableSample {
+            temperature_f: 89.0,
+            observed_at_unix_ms: 10 * 3_600_000,
+        };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor2,
+            80.0,
+            -9.0,
+            &segs,
+            20 * 3_600_000,
+        );
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Spa)[1].regime,
+            crate::calibrator::IntervalRegime::ExcludedAnomalous
+        );
+    }
+
+    #[test]
+    fn capture_discards_gap_overlapping_body_activity() {
+        let mut estimator = test_estimator();
+        // Body ran 4h..5h inside the 0..10h gap.
+        estimator.test_note_activity(HeatingBodyKind::Spa, true, 4 * 3_600_000);
+        estimator.test_note_activity(HeatingBodyKind::Spa, false, 5 * 3_600_000);
+        let segs = vec![test_weather_segment(0, 20 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample {
+            temperature_f: 90.0,
+            observed_at_unix_ms: 0,
+        };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa,
+            anchor,
+            89.0,
+            0.3,
+            &segs,
+            10 * 3_600_000,
+        );
+        assert!(estimator.intervals(HeatingBodyKind::Spa).is_empty());
+    }
+
+    #[test]
+    fn interval_buffer_is_bounded() {
+        let mut estimator = test_estimator();
+        // A single segment spanning the whole test range. `bucket_weather`'s
+        // bucket count is driven only by each call's own `[anchor, now]` gap
+        // (8h here), not by the segment's own span, so an oversized segment
+        // end (matching the spec's stress-test shape) stays cheap.
+        let segs = vec![test_weather_segment(0, i64::MAX / 2, 60.0)];
+        for i in 0..(MAX_INTERVALS_PER_BODY + 10) {
+            let t0 = i as i64 * 10 * 3_600_000;
+            let anchor = thermal::ReliableSample {
+                temperature_f: 90.0,
+                observed_at_unix_ms: t0,
+            };
+            estimator.capture_cooling_interval(
+                HeatingBodyKind::Pool,
+                anchor,
+                89.5,
+                0.1,
+                &segs,
+                t0 + 8 * 3_600_000,
+            );
+        }
+        assert_eq!(
+            estimator.intervals(HeatingBodyKind::Pool).len(),
+            MAX_INTERVALS_PER_BODY
         );
     }
 
