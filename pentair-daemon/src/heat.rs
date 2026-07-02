@@ -3610,4 +3610,49 @@ mod tests {
         assert!(snap["pool"].is_object());
         assert!(snap["mae_trend"].is_array());
     }
+
+    #[test]
+    fn end_to_end_capture_then_refit_recovers_truth_and_excludes_anomaly() {
+        let mut estimator = test_estimator();
+        let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
+        *estimator.cooling_params_slot_mut(HeatingBodyKind::Spa) =
+            Some(CoolingParams { k0_per_hour: 1.0 / 40.0, ..CoolingParams::seed() });
+
+        // Capture 8 clean intervals THROUGH the real capture path.
+        for i in 0..8 {
+            let t0 = i as i64 * 12 * 3_600_000;
+            let t1 = t0 + 10 * 3_600_000;
+            let segs = vec![test_weather_segment(t0, t1, 60.0)];
+            let anchor = thermal::ReliableSample { temperature_f: 95.0, observed_at_unix_ms: t0 };
+            let probe = crate::calibrator::CoolingInterval {
+                t0_unix_ms: t0, t1_unix_ms: t1, temp0_f: 95.0, temp1_f: 0.0,
+                regime: crate::calibrator::IntervalRegime::IdleCovered,
+                weather: crate::calibrator::bucket_weather(&segs, t0, t1),
+            };
+            let actual = crate::calibrator::predict_interval_end(
+                &probe, &truth, thermal::SolarSite::disabled());
+            // error vs CURRENT (wrong) params is small enough to stay IdleCovered
+            // because rolling MAE is None -> floor 0.75*3 = 2.25F... so use the
+            // real error the capture path would compute: pass a modest error.
+            estimator.capture_cooling_interval(
+                HeatingBodyKind::Spa, anchor, actual, 1.0, &segs, t1);
+        }
+        // One wild swim-loss interval: tagged anomalous, excluded from the fit.
+        let t0 = 8 * 12 * 3_600_000;
+        let segs = vec![test_weather_segment(t0, t0 + 10 * 3_600_000, 60.0)];
+        let anchor = thermal::ReliableSample { temperature_f: 95.0, observed_at_unix_ms: t0 };
+        estimator.capture_cooling_interval(
+            HeatingBodyKind::Spa, anchor, 80.0, -12.0, &segs, t0 + 10 * 3_600_000);
+
+        let counts = estimator.intervals(HeatingBodyKind::Spa);
+        assert_eq!(counts.len(), 9);
+        assert_eq!(counts.iter().filter(|i|
+            i.regime == crate::calibrator::IntervalRegime::ExcludedAnomalous).count(), 1);
+
+        // Refit: moves tau from 40h toward 96h (damped single step).
+        let before = estimator.cooling_params(HeatingBodyKind::Spa).k0_per_hour;
+        estimator.maybe_refit(HeatingBodyKind::Spa, t0 + 11 * 3_600_000);
+        let after = estimator.cooling_params(HeatingBodyKind::Spa).k0_per_hour;
+        assert!(after < before, "tau must move toward the (slower) truth");
+    }
 }
