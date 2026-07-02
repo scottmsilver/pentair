@@ -3402,17 +3402,20 @@ mod tests {
     fn refit_needs_min_new_intervals_unless_mae_drifts() {
         let mut estimator = test_estimator();
         let truth = CoolingParams { k0_per_hour: 1.0 / 96.0, ..CoolingParams::seed() };
-        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 2); // < 4
+        // 3 intervals: below the count trigger (min_new_intervals = 4) but
+        // enough for the holdout guard (window.len() >= 3), so the ONLY way
+        // past the gate is the MAE-drift branch — the count path cannot fire.
+        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 3);
         // Adaptation: same reasoning as `refit_applies_validated_blend_silently`
         // — keep `now` within the rolling `window_days` window of the seeded
-        // synthetic intervals (max t1 ~= 46h after the second seeding below).
+        // synthetic intervals (max t1 = 34h).
         let now = 5 * 12 * 3_600_000;
         let before = estimator.cooling_params(HeatingBodyKind::Spa);
         estimator.maybe_refit(HeatingBodyKind::Spa, now);
         assert_eq!(estimator.cooling_params(HeatingBodyKind::Spa), before, "too few intervals, no drift");
-        // Drifted MAE forces the fit even with few intervals... but the accept
-        // gate needs a holdout, so seed enough for a split first.
-        seed_synthetic_intervals(&mut estimator, HeatingBodyKind::Spa, &truth, 4);
+        assert_eq!(estimator.store.spa_last_refit_unix_ms, None, "gate must not fire on count alone");
+        // Same interval count, but now the rolling MAE has drifted past
+        // mae_drift_f: the drift branch alone must force the fit.
         *estimator.prediction_mae_slot_mut(HeatingBodyKind::Spa) = Some(5.0); // > mae_drift_f
         estimator.maybe_refit(HeatingBodyKind::Spa, now);
         assert!(estimator.store.spa_last_refit_unix_ms.is_some(), "drift trigger fired");
