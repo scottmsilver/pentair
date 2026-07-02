@@ -191,6 +191,78 @@ pub fn fit_intervals(intervals: &[&CoolingInterval], seed: &CoolingParams, site:
     best
 }
 
+/// Deterministic holdout: every 3rd interval (index % 3 == 0) is held out.
+pub fn holdout_split(intervals: &[CoolingInterval]) -> (Vec<&CoolingInterval>, Vec<&CoolingInterval>) {
+    let mut fit_set = Vec::new();
+    let mut holdout = Vec::new();
+    for (i, interval) in intervals.iter().enumerate() {
+        if i % 3 == 0 {
+            holdout.push(interval);
+        } else {
+            fit_set.push(interval);
+        }
+    }
+    (fit_set, holdout)
+}
+
+/// The accept gate (spec §6). Scores the CURRENT params and the DAMPED BLEND of
+/// current+candidate on the SAME holdout intervals (the blend is what actually
+/// gets applied, so the blend is what gets validated). Returns the blend on
+/// accept; `None` on reject. Evap coefficients always come from `current`.
+pub fn evaluate_candidate(
+    current: &CoolingParams,
+    candidate: &CoolingParams,
+    holdout: &[&CoolingInterval],
+    site: SolarSite,
+    damping_alpha: f64,
+    tolerance_f: f64,
+) -> Option<CoolingParams> {
+    if holdout.is_empty() {
+        return None;
+    }
+    let a = damping_alpha.clamp(0.0, 1.0);
+    let blend = CoolingParams {
+        k0_per_hour: current.k0_per_hour * (1.0 - a) + candidate.k0_per_hour * a,
+        k_wind_per_hour_per_mph: current.k_wind_per_hour_per_mph * (1.0 - a)
+            + candidate.k_wind_per_hour_per_mph * a,
+        solar_gain_f: current.solar_gain_f * (1.0 - a) + candidate.solar_gain_f * a,
+        evap_a: current.evap_a,
+        evap_b: current.evap_b,
+        max_projection_hours: current.max_projection_hours,
+    };
+    // Physical clamps: reject rather than silently repair (spec §6).
+    let tau = 1.0 / blend.k0_per_hour;
+    let physical = blend.k0_per_hour.is_finite()
+        && blend.solar_gain_f.is_finite()
+        && blend.k_wind_per_hour_per_mph.is_finite()
+        && (FIT_TAU_MIN_HOURS..=FIT_TAU_MAX_HOURS).contains(&tau)
+        && (0.0..=FIT_G_MAX).contains(&blend.solar_gain_f);
+    if !physical {
+        return None;
+    }
+    let blend_mae = score_params(holdout, &blend, site);
+    let current_mae = score_params(holdout, current, site);
+    (blend_mae.is_finite() && current_mae.is_finite() && blend_mae <= current_mae + tolerance_f)
+        .then_some(blend)
+}
+
+/// Fraction of intervals ending at/after `window_start_unix_ms` that were
+/// excluded as anomalous — the §9 exclusion-deadlock detector's input.
+pub fn exclusion_rate(intervals: &[CoolingInterval], window_start_unix_ms: i64) -> f64 {
+    let in_window: Vec<&CoolingInterval> = intervals
+        .iter()
+        .filter(|i| i.t1_unix_ms >= window_start_unix_ms)
+        .collect();
+    if in_window.is_empty() {
+        return 0.0;
+    }
+    in_window
+        .iter()
+        .filter(|i| i.regime == IntervalRegime::ExcludedAnomalous)
+        .count() as f64
+        / in_window.len() as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -321,5 +393,57 @@ mod tests {
         assert!(score_params(&refs, &truth, SolarSite::disabled()) < 1e-9);
         let wrong = params(1.0 / 10.0, 0.0);
         assert!(score_params(&refs, &wrong, SolarSite::disabled()) > 0.5);
+    }
+
+    #[test]
+    fn holdout_split_is_deterministic_and_nonempty() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let intervals: Vec<CoolingInterval> =
+            (0..6).map(|i| synth_interval(i * 12, 10, 95.0, 60.0, &truth)).collect();
+        let (fit_set, holdout) = holdout_split(&intervals);
+        assert_eq!(fit_set.len(), 4);
+        assert_eq!(holdout.len(), 2); // indices 0 and 3
+        let (fit2, hold2) = holdout_split(&intervals);
+        assert_eq!(fit_set.len(), fit2.len());
+        assert_eq!(holdout.len(), hold2.len());
+    }
+
+    #[test]
+    fn candidate_better_on_same_holdout_is_accepted_and_blended() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let intervals: Vec<CoolingInterval> =
+            (0..6).map(|i| synth_interval(i * 12, 10, 95.0, 60.0, &truth)).collect();
+        let (_, holdout) = holdout_split(&intervals);
+        let current = params(1.0 / 30.0, 0.0); // badly wrong
+        let blended = evaluate_candidate(&current, &truth, &holdout, SolarSite::disabled(), 0.3, 0.15)
+            .expect("better candidate must be accepted");
+        // Damped: strictly between current and candidate.
+        assert!(blended.k0_per_hour < current.k0_per_hour);
+        assert!(blended.k0_per_hour > truth.k0_per_hour);
+    }
+
+    #[test]
+    fn worse_candidate_is_rejected() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let intervals: Vec<CoolingInterval> =
+            (0..6).map(|i| synth_interval(i * 12, 10, 95.0, 60.0, &truth)).collect();
+        let (_, holdout) = holdout_split(&intervals);
+        let awful = params(1.0 / 2.0, 0.0);
+        assert!(evaluate_candidate(&truth, &awful, &holdout, SolarSite::disabled(), 0.3, 0.15).is_none());
+    }
+
+    #[test]
+    fn exclusion_rate_counts_only_window() {
+        let truth = params(1.0 / 96.0, 0.0);
+        let mut intervals: Vec<CoolingInterval> =
+            (0..4).map(|i| synth_interval(i * 12, 10, 95.0, 60.0, &truth)).collect();
+        intervals[2].regime = IntervalRegime::ExcludedAnomalous;
+        intervals[3].regime = IntervalRegime::ExcludedAnomalous;
+        // Window covering only the last two intervals -> 100% excluded.
+        let window_start = intervals[2].t1_unix_ms - 1;
+        assert_eq!(exclusion_rate(&intervals, window_start), 1.0);
+        // Whole history -> 50%.
+        assert_eq!(exclusion_rate(&intervals, 0), 0.5);
+        assert_eq!(exclusion_rate(&[], 0), 0.0);
     }
 }
