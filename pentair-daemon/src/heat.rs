@@ -48,6 +48,13 @@ const K0_MAX_STEP_FRACTION: f64 = 0.25;
 /// Floor on the per-step k0 cap, so the step never collapses to zero when k0 is
 /// already tiny.
 const MIN_K0_STEP: f64 = 1.0e-6;
+/// Hard cap on stored calibrator cooling intervals per body (spec-driven; see
+/// `crate::calibrator`), so the store stays bounded on long-running installs.
+const MAX_INTERVALS_PER_BODY: usize = 200;
+/// Hard cap on stored body-activity windows (pump/body on->off transitions).
+const MAX_ACTIVITY_WINDOWS: usize = 200;
+/// Hard cap on stored rolling-MAE history points.
+const MAX_MAE_POINTS: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum HeatingBodyKind {
@@ -79,6 +86,24 @@ struct TemperatureTrust {
 struct ReliableTemperatureObservation {
     temperature: i32,
     observed_at_unix_ms: i64,
+}
+
+/// A recorded pump/body activity span (on -> off), used by the calibrator to
+/// reject cooling intervals that weren't idle across their whole span.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct ActivityWindow {
+    body: HeatingBodyKind,
+    start_unix_ms: i64,
+    end_unix_ms: i64,
+}
+
+/// One rolling-MAE sample, kept for trend/debugging visibility alongside the
+/// scalar `*_prediction_mae_f` EWMA.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct MaePoint {
+    body: HeatingBodyKind,
+    at_unix_ms: i64,
+    mae_f: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +234,35 @@ struct HeatEstimatorStore {
     pool_prediction_mae_f: Option<f64>,
     #[serde(default)]
     spa_prediction_mae_f: Option<f64>,
+    /// Captured cooling intervals (spec: continuous thermal calibrator) feeding
+    /// the closed-loop cooling-params fit. Bounded to `MAX_INTERVALS_PER_BODY`.
+    #[serde(default)]
+    pool_cooling_intervals: Vec<crate::calibrator::CoolingInterval>,
+    #[serde(default)]
+    spa_cooling_intervals: Vec<crate::calibrator::CoolingInterval>,
+    /// Pump/body on->off activity spans, used to reject cooling intervals that
+    /// weren't idle across their whole span. Bounded to `MAX_ACTIVITY_WINDOWS`.
+    #[serde(default)]
+    activity_windows: Vec<ActivityWindow>,
+    /// Rolling-MAE history points, bounded to `MAX_MAE_POINTS`.
+    #[serde(default)]
+    mae_history: Vec<MaePoint>,
+    #[serde(default)]
+    pool_outlet_offset_f: Option<f64>,
+    #[serde(default)]
+    spa_outlet_offset_f: Option<f64>,
+    #[serde(default)]
+    pool_bulk_rate_f_per_hour: Option<f64>,
+    #[serde(default)]
+    spa_bulk_rate_f_per_hour: Option<f64>,
+    #[serde(default)]
+    pool_last_refit_unix_ms: Option<i64>,
+    #[serde(default)]
+    spa_last_refit_unix_ms: Option<i64>,
+    #[serde(default)]
+    pool_offset_done_session_end_ms: Option<i64>,
+    #[serde(default)]
+    spa_offset_done_session_end_ms: Option<i64>,
 }
 
 impl HeatEstimatorStore {
@@ -260,6 +314,26 @@ impl HeatEstimator {
     #[cfg(test)]
     pub fn load(config: HeatingConfig, path: PathBuf) -> Self {
         Self::load_with_notifications(config, SpaHeatNotificationsConfig::default(), path)
+    }
+
+    /// Test-only helper: drives `update_active_since_for_body` with a minimal
+    /// synthetic telemetry sample at a caller-supplied clock, so activity-window
+    /// recording can be exercised without a full `PoolSystem`.
+    #[cfg(test)]
+    fn test_note_activity(&mut self, body: HeatingBodyKind, active: bool, now_unix_ms: i64) {
+        let telemetry = BodyTelemetry {
+            on: active,
+            active,
+            pool_spa_shared_pump: true,
+            temperature: 80,
+            setpoint: 80,
+            temperature_f: 80.0,
+            setpoint_f: 80.0,
+            heat_mode: "off".to_string(),
+            heating: "off".to_string(),
+            air_temp_f: None,
+        };
+        self.update_active_since_for_body(body, Some(&telemetry), now_unix_ms);
     }
 
     pub fn load_with_notifications(
@@ -899,6 +973,8 @@ impl HeatEstimator {
             ),
         };
 
+        let mut activity_window_to_push: Option<ActivityWindow> = None;
+
         match telemetry {
             Some(telemetry) if telemetry.active => {
                 if *last_active_observed == Some(false) {
@@ -912,12 +988,31 @@ impl HeatEstimator {
                 *last_active_observed = Some(true);
             }
             Some(_) => {
+                if *last_active_observed == Some(true) {
+                    // Body just turned off: record the activity window so the
+                    // calibrator can reject cooling intervals it overlaps
+                    // (spec §3: idle across the WHOLE gap, not just endpoints).
+                    let start = slot.unwrap_or(now_unix_ms);
+                    activity_window_to_push = Some(ActivityWindow {
+                        body,
+                        start_unix_ms: start,
+                        end_unix_ms: now_unix_ms,
+                    });
+                }
                 *slot = None;
                 *last_active_observed = Some(false);
             }
             None => {
                 *slot = None;
                 *last_active_observed = None;
+            }
+        }
+
+        if let Some(window) = activity_window_to_push {
+            self.store.activity_windows.push(window);
+            let len = self.store.activity_windows.len();
+            if len > MAX_ACTIVITY_WINDOWS {
+                self.store.activity_windows.drain(..len - MAX_ACTIVITY_WINDOWS);
             }
         }
     }
@@ -1319,6 +1414,39 @@ impl HeatEstimator {
             HeatingBodyKind::Pool => self.store.pool_prediction_mae_f,
             HeatingBodyKind::Spa => self.store.spa_prediction_mae_f,
         }
+    }
+
+    fn intervals(&self, body: HeatingBodyKind) -> &[crate::calibrator::CoolingInterval] {
+        match body {
+            HeatingBodyKind::Pool => &self.store.pool_cooling_intervals,
+            HeatingBodyKind::Spa => &self.store.spa_cooling_intervals,
+        }
+    }
+
+    fn intervals_slot_mut(
+        &mut self,
+        body: HeatingBodyKind,
+    ) -> &mut Vec<crate::calibrator::CoolingInterval> {
+        match body {
+            HeatingBodyKind::Pool => &mut self.store.pool_cooling_intervals,
+            HeatingBodyKind::Spa => &mut self.store.spa_cooling_intervals,
+        }
+    }
+
+    /// True when any recorded pump/body activity window for `body` overlaps the
+    /// open gap. Complements `heating_overlapped_gap` (heater sessions) so a
+    /// cooling interval is idle across its WHOLE span (spec §3).
+    fn activity_overlapped_gap(
+        &self,
+        body: HeatingBodyKind,
+        gap_start_unix_ms: i64,
+        gap_end_unix_ms: i64,
+    ) -> bool {
+        self.store.activity_windows.iter().any(|w| {
+            w.body == body
+                && w.start_unix_ms < gap_end_unix_ms
+                && w.end_unix_ms > gap_start_unix_ms
+        })
     }
 
     /// True when a heating session for `body` overlapped the sensing gap
@@ -2135,6 +2263,17 @@ mod tests {
         path
     }
 
+    /// Fixture: a fresh estimator backed by a unique temp-file store path (no
+    /// existing tempdir-tuple fixture exists in this module, so this follows
+    /// `test_store_path`'s pid-plus-name-based uniqueness instead).
+    fn test_estimator() -> HeatEstimator {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = test_store_path(&format!("activity-windows-{id}"));
+        HeatEstimator::load(test_config(), path)
+    }
+
     fn history_time(day: u16, hour: u16, minute: u16, second: u16) -> SLDateTime {
         SLDateTime {
             year: 2026,
@@ -2907,5 +3046,45 @@ mod tests {
             holdout_mae < 1.5,
             "held-out projection MAE {holdout_mae} °F should be under threshold"
         );
+    }
+
+    #[test]
+    fn store_new_fields_default_and_round_trip_old_file() {
+        // An old-format store (missing every new field) must deserialize.
+        let old = r#"{
+            "pool_learned_rate_f_per_hour": 2.0,
+            "spa_learned_rate_f_per_hour": null,
+            "pool_last_reliable_temperature": null,
+            "spa_last_reliable_temperature": null,
+            "recent_sessions": []
+        }"#;
+        let store: HeatEstimatorStore = serde_json::from_str(old).expect("back-compat");
+        assert!(store.pool_cooling_intervals.is_empty());
+        assert!(store.activity_windows.is_empty());
+        assert!(store.mae_history.is_empty());
+        assert!(store.pool_outlet_offset_f.is_none());
+        assert!(store.pool_last_refit_unix_ms.is_none());
+        // And the extended store round-trips.
+        let json = serde_json::to_string(&store).expect("serialize");
+        let _: HeatEstimatorStore = serde_json::from_str(&json).expect("round-trip");
+    }
+
+    #[test]
+    fn activity_windows_recorded_on_body_off_transition_and_bounded() {
+        let mut estimator = test_estimator();
+        for i in 0..(MAX_ACTIVITY_WINDOWS + 10) {
+            let t_on = (i as i64) * 100_000;
+            estimator.test_note_activity(HeatingBodyKind::Spa, true, t_on);
+            estimator.test_note_activity(HeatingBodyKind::Spa, false, t_on + 50_000);
+        }
+        assert_eq!(estimator.store.activity_windows.len(), MAX_ACTIVITY_WINDOWS);
+        // Overlap detection: last window overlaps a gap spanning it.
+        let last = *estimator.store.activity_windows.last().unwrap();
+        assert!(estimator.activity_overlapped_gap(
+            HeatingBodyKind::Spa, last.start_unix_ms - 10, last.end_unix_ms + 10));
+        assert!(!estimator.activity_overlapped_gap(
+            HeatingBodyKind::Spa, last.end_unix_ms + 10, last.end_unix_ms + 20));
+        assert!(!estimator.activity_overlapped_gap(
+            HeatingBodyKind::Pool, last.start_unix_ms - 10, last.end_unix_ms + 10));
     }
 }
