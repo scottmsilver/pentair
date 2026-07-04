@@ -379,7 +379,7 @@ pub struct HeatingConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CoolingConfig {
     /// Hard cap on how far forward we project before reverting to "measured N
-    /// ago". The effective cutoff is `min(3*tau, max_projection_hours)`.
+    /// ago". This cap alone is the cutoff (no tau-based clamp).
     #[serde(default = "default_max_projection_hours")]
     pub max_projection_hours: f64,
     /// Optional seed for the covered-idle relaxation time constant (hours).

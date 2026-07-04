@@ -712,6 +712,19 @@ impl HeatEstimator {
     }
 
     pub fn apply_to_system(&self, system: &mut PoolSystem, weather: &WeatherCache) {
+        self.apply_to_system_with_staleness(system, weather, false);
+    }
+
+    /// Like [`Self::apply_to_system`], but when `snapshot_stale` is true the
+    /// cached controller data is too old to present as live (adapter link
+    /// down): both bodies are forced not-reliable so the weather-informed
+    /// prediction takes over instead of a frozen reading wearing a live badge.
+    pub fn apply_to_system_with_staleness(
+        &self,
+        system: &mut PoolSystem,
+        weather: &WeatherCache,
+        snapshot_stale: bool,
+    ) {
         let use_celsius = uses_celsius(system.system.temp_unit);
         let air_temp_f = Some(to_fahrenheit(
             system.system.air_temperature as f64,
@@ -719,11 +732,18 @@ impl HeatEstimator {
         ));
         let shared_pump = system.system.pool_spa_shared_pump;
         let now_unix_ms = unix_time_ms();
+        let stale_trust = || TemperatureTrust {
+            reliable: false,
+            reason: Some("stale-snapshot"),
+        };
 
         if let Some(pool) = system.pool.as_mut() {
             let telemetry = BodyTelemetry::from_pool(pool, air_temp_f, use_celsius, shared_pump);
-            let trust =
-                self.temperature_trust_for_body(HeatingBodyKind::Pool, &telemetry, now_unix_ms);
+            let trust = if snapshot_stale {
+                stale_trust()
+            } else {
+                self.temperature_trust_for_body(HeatingBodyKind::Pool, &telemetry, now_unix_ms)
+            };
             let last_reliable = self.last_reliable_temperature(HeatingBodyKind::Pool);
             pool.temperature_reliable = trust.reliable;
             pool.temperature_reason = trust.reason.map(str::to_string);
@@ -742,6 +762,7 @@ impl HeatEstimator {
                 weather,
                 use_celsius,
                 now_unix_ms,
+                snapshot_stale,
                 &mut PredictionFields::pool(pool),
             );
             pool.temperature_display = temperature_display(pool);
@@ -755,8 +776,11 @@ impl HeatEstimator {
 
         if let Some(spa) = system.spa.as_mut() {
             let telemetry = BodyTelemetry::from_spa(spa, air_temp_f, use_celsius, shared_pump);
-            let trust =
-                self.temperature_trust_for_body(HeatingBodyKind::Spa, &telemetry, now_unix_ms);
+            let trust = if snapshot_stale {
+                stale_trust()
+            } else {
+                self.temperature_trust_for_body(HeatingBodyKind::Spa, &telemetry, now_unix_ms)
+            };
             let last_reliable = self.last_reliable_temperature(HeatingBodyKind::Spa);
             spa.temperature_reliable = trust.reliable;
             spa.temperature_reason = trust.reason.map(str::to_string);
@@ -775,6 +799,7 @@ impl HeatEstimator {
                 weather,
                 use_celsius,
                 now_unix_ms,
+                snapshot_stale,
                 &mut PredictionFields::spa(spa),
             );
             spa.temperature_display = temperature_display(spa);
@@ -796,6 +821,7 @@ impl HeatEstimator {
     /// Degradation order (most → least trustworthy):
     /// full weather → controller-air cooling-only → none/measured.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn apply_prediction(
         &self,
         body: HeatingBodyKind,
@@ -804,6 +830,7 @@ impl HeatEstimator {
         weather: &WeatherCache,
         use_celsius: bool,
         now_unix_ms: i64,
+        snapshot_stale: bool,
         fields: &mut PredictionFields<'_>,
     ) {
         if trust.reliable {
@@ -813,7 +840,10 @@ impl HeatEstimator {
         // (covered). A body that is on + circulating but momentarily unreliable
         // (e.g. inside its shared-pump sensor warmup) is NOT cooling — projecting
         // a cooling number there would be wrong, so fall back to measured/none.
-        let is_idle = !(telemetry.on && telemetry.active);
+        // EXCEPT when the snapshot is stale: the frozen on/active flags say
+        // nothing about the body's state NOW, and idle-covered is the best
+        // available assumption — so project rather than show a frozen reading.
+        let is_idle = snapshot_stale || !(telemetry.on && telemetry.active);
         if !is_idle {
             return;
         }
@@ -3148,6 +3178,36 @@ mod tests {
         assert!(spa.predicted_temperature.is_none());
         assert!(spa.prediction_basis.is_none());
         assert!(!spa.temperature_display.is_predicted);
+    }
+
+    #[test]
+    fn stale_snapshot_forces_estimate_even_when_frozen_state_looks_live() {
+        // A frozen controller snapshot (adapter link down) says the body is
+        // on + active + reliable -- but that's yesterday's data. With
+        // snapshot_stale the body must flip to not-reliable ("stale-snapshot")
+        // and the weather prediction must engage DESPITE the frozen on/active
+        // flags (the idle guard yields in stale mode).
+        let path = test_store_path("stale-snapshot-estimate");
+        let mut estimator = HeatEstimator::load(test_config(), path);
+        let now = unix_time_ms();
+        estimator.store.spa_last_reliable_temperature = Some(ReliableTemperatureObservation {
+            temperature: 98,
+            observed_at_unix_ms: now - 2 * 3_600_000,
+        });
+        // on=true, active=true, non-shared pump: normally always reliable.
+        let mut system = test_system(98, 104, true, true, "off");
+        system.system.pool_spa_shared_pump = false;
+        let weather = gap_weather(now, 3, 60.0);
+
+        estimator.apply_to_system_with_staleness(&mut system, &weather, true);
+
+        let spa = system.spa.expect("spa");
+        assert!(!spa.temperature_reliable, "stale snapshot must not read as live");
+        assert_eq!(spa.temperature_reason.as_deref(), Some("stale-snapshot"));
+        let predicted = spa.predicted_temperature.expect("estimate must engage");
+        assert!(predicted < 98, "cooling toward cool air: {predicted}");
+        assert!(spa.temperature_display.is_predicted);
+        assert!(spa.temperature_display.is_stale);
     }
 
     #[test]

@@ -217,6 +217,12 @@ pub async fn run_adapter(
             }
         }
 
+        // Nudge websocket clients each retry cycle: once the cached snapshot
+        // crosses the staleness threshold their re-fetch flips the bodies to
+        // the weather estimate, instead of a frozen "live" frame lingering on
+        // screen for the whole outage.
+        let _ = push_tx.send(PushEvent::StatusChanged);
+
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(max_backoff);
     }
@@ -416,6 +422,15 @@ async fn refresh_runtime_state(
     {
         let mut guard = state.write().await;
         guard.status = Some(status);
+        // Freshness stamp: lets the API detect a frozen snapshot after the
+        // adapter link drops and flip temperatures to estimate instead of
+        // presenting yesterday's reading as live.
+        guard.status_updated_unix_ms = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        );
     }
 
     refresh_pumps(client, state).await;
