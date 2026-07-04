@@ -8,6 +8,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// A cached controller snapshot older than this is STALE: its "live"
+/// temperatures can no longer be trusted (the adapter link is down), so the
+/// bodies flip to not-reliable and the weather-informed estimate takes over.
+/// The adapter normally refreshes every few seconds; 5 minutes is generous.
+const STALE_SNAPSHOT_MS: i64 = 5 * 60_000;
+
 #[derive(Debug)]
 pub struct CachedState {
     pub status: Option<PoolStatus>,
@@ -22,13 +28,28 @@ pub struct CachedState {
     pub heat: HeatEstimator,
     /// Recent observed + forecast weather samples for the temperature predictor.
     pub weather: WeatherCache,
+    /// When `status` was last refreshed from the controller (unix ms). Used to
+    /// detect a frozen snapshot after the adapter link drops.
+    pub status_updated_unix_ms: Option<i64>,
     circuit_map: Option<CircuitMap>,
 }
 
 impl CachedState {
+    /// True when the cached controller snapshot is too old to present as live
+    /// (see [`STALE_SNAPSHOT_MS`]).
+    fn snapshot_stale(&self) -> bool {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        self.status_updated_unix_ms
+            .is_some_and(|at| now_ms.saturating_sub(at) > STALE_SNAPSHOT_MS)
+    }
+
     pub fn pool_system(&self) -> Option<PoolSystem> {
         let (mut system, _) = self.build_semantic()?;
-        self.heat.apply_to_system(&mut system, &self.weather);
+        self.heat
+            .apply_to_system_with_staleness(&mut system, &self.weather, self.snapshot_stale());
         Some(system)
     }
 
@@ -43,7 +64,9 @@ impl CachedState {
             return (None, Vec::new());
         };
 
-        self.heat.apply_to_system(&mut system, &self.weather);
+        let stale = self.snapshot_stale();
+        self.heat
+            .apply_to_system_with_staleness(&mut system, &self.weather, stale);
         let events = self.heat.spa_heat_notification_events_for_system(&system);
         (Some(system), events)
     }
@@ -102,6 +125,7 @@ pub fn new_shared_state(
         scg: None,
         version: None,
         light_mode: None,
+        status_updated_unix_ms: None,
         circuit_map: None,
     }))
 }

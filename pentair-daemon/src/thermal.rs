@@ -146,7 +146,10 @@ pub struct CoolingParams {
     /// when daytime (solar > 0) intervals are present.
     pub solar_gain_f: f64,
     /// Hard cap on how far forward we project before reverting to measured
-    /// (hours). The effective cutoff is `min(3*tau, max_projection_hours)`.
+    /// (hours). This alone is the cutoff: beyond ~3*tau the projection simply
+    /// converges to the weather-driven equilibrium, which is still a
+    /// meaningful estimate, so no additional tau-based clamp applies and the
+    /// uncertainty band (capped at ±6 °F) carries the honesty instead.
     pub max_projection_hours: f64,
 }
 
@@ -175,9 +178,11 @@ impl CoolingParams {
         1.0 / self.k0_per_hour.max(MIN_K_PER_HOUR)
     }
 
-    /// Effective max-projection cutoff in hours: `min(3*tau, max_projection_hours)`.
+    /// Effective max-projection cutoff in hours: the configured cap alone.
+    /// (Formerly also clamped to 3*tau, but a beyond-3*tau projection just
+    /// relaxes to the weather-driven equilibrium — still a useful estimate.)
     fn cutoff_hours(&self) -> f64 {
-        (3.0 * self.tau_hours()).min(self.max_projection_hours.max(0.0))
+        self.max_projection_hours.max(0.0)
     }
 }
 
@@ -455,7 +460,7 @@ fn uncertainty_for_gap(gap_hours: f64) -> f64 {
 ///
 /// Behaviour:
 /// - non-positive gap → returns the anchor unchanged (`basis = measured`);
-/// - gap beyond `min(3*tau, max_projection_hours)` → `basis = none`
+/// - gap beyond `max_projection_hours` → `basis = none`
 ///   (revert UI to "measured N ago"), predicted value held at the anchor;
 /// - no usable segments (no air temperature) → `basis = none`;
 /// - segments carry full weather → `basis = projected-weather`;
@@ -1081,16 +1086,20 @@ mod tests {
     }
 
     #[test]
-    fn cutoff_uses_three_tau_when_smaller_than_max() {
-        // tau = 1h -> 3*tau = 3h is the binding cutoff (< 12h).
+    fn cutoff_ignores_tau_and_projects_past_three_tau() {
+        // tau = 1h -> a 5h gap is far past 3*tau, but the config cap (12h) is
+        // the only cutoff now: the projection runs (converged ~to equilibrium)
+        // instead of refusing with basis None.
         let params = CoolingParams {
             max_projection_hours: 12.0,
             ..conduction_params(1.0)
         };
-        let now = 5 * HOUR_MS; // 5h > 3h cutoff
+        let now = 5 * HOUR_MS; // 5h > 3*tau, < 12h config cap
         let segment = cooling_only_segment(0, now, 70.0);
         let out = project_temperature(anchor(85.0, 0), &[segment], &params, now);
-        assert_eq!(out.basis, PredictionBasis::None);
+        assert_eq!(out.basis, PredictionBasis::ProjectedCoolingOnly);
+        // Far past 3*tau the water has essentially reached the air temp.
+        assert!((out.predicted_f - 70.0).abs() < 1.0);
     }
 
     // ----- fit_cooling_params -----
