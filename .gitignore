@@ -31,3 +31,9 @@ pentair-ios/PentairIOS/GoogleService-Info.plist
 
 # Instance-specific build configs (use .example files as templates)
 pentair-ios/Instance.xcconfig
+
+# AI-tooling scratch/working artifacts (per-developer, never shared)
+.claude/worktrees/
+.cchost-events.jsonl
+.codex
+.superpowers/
