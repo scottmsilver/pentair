@@ -391,6 +391,28 @@ fn segment_irradiance_kw(segment: &WeatherSegment) -> f64 {
     ) / 1000.0
 }
 
+/// Maximum °F the daytime solar term may lift the relaxation target above air.
+///
+/// The steady-state solar offset is `(g / k_eff) * I_solar`. Because it scales
+/// as `1/k_eff`, a well-insulated body (small `k`, long tau) inflates it without
+/// bound — e.g. the deployed spa (`k0≈0.009`, `g=0.6`) implies a ~40 °F daytime
+/// offset, a ~130 °F "equilibrium", and a long projection then drags the water
+/// up toward it (the "spa estimated at 114 °F" runaway). Real covered pools sit
+/// at most ~10–15 °F above air even in peak sun, so we bound the offset. This is
+/// a physical invariant on the model, not a per-body special case.
+const SOLAR_EQUILIBRIUM_BUMP_MAX_F: f64 = 15.0;
+
+/// Solar offset added to the relaxation target (°F above air) for gain `g`,
+/// effective cooling constant `k_eff`, and absorbed irradiance `irradiance_kw`.
+/// Bounded to `[0, SOLAR_EQUILIBRIUM_BUMP_MAX_F]` so a small `k_eff` can't turn
+/// `(g/k)*I` into an unphysical equilibrium. Shared by the forward projector
+/// ([`relax_over_segment`]) and the fit's one-step model ([`predict_step`]) so
+/// calibration and projection agree on the same bounded physics.
+fn solar_equilibrium_bump_f(solar_gain_f: f64, k_eff: f64, irradiance_kw: f64) -> f64 {
+    let k = k_eff.max(MIN_K_PER_HOUR);
+    ((solar_gain_f / k) * irradiance_kw).clamp(0.0, SOLAR_EQUILIBRIUM_BUMP_MAX_F)
+}
+
 /// Advance the water temperature passively (no heater) across one
 /// constant-weather segment, using the project's single source of truth for the
 /// thermal relaxation (cooling + solar + evaporation). This is a thin public
@@ -425,7 +447,7 @@ fn relax_over_segment(
     // segment midpoint, raising the relaxation target by (g / k_eff) * I_solar.
     // Night → I_solar = 0 → no bump → overnight cooling is unchanged.
     let irradiance_kw = segment_irradiance_kw(segment);
-    let solar_bump = (params.solar_gain_f / k_eff) * irradiance_kw;
+    let solar_bump = solar_equilibrium_bump_f(params.solar_gain_f, k_eff, irradiance_kw);
     let t_eq = segment.air_temp_f + solar_bump;
 
     // SIGNED Dalton evaporation, frozen at the segment-start water temperature.
@@ -661,7 +683,7 @@ fn best_solar_gain_for_k(pairs: &[FitPair], k: f64) -> f64 {
 
 /// One-step prediction under the relaxation-with-solar model.
 fn predict_step(t0: f64, dt: f64, air: f64, irr: f64, k: f64, g: f64) -> f64 {
-    let t_eq = air + (g / k) * irr;
+    let t_eq = air + solar_equilibrium_bump_f(g, k, irr);
     t_eq + (t0 - t_eq) * (-k * dt).exp()
 }
 
@@ -1309,6 +1331,48 @@ mod tests {
             out.predicted_f > 80.0,
             "midday solar should warm water above air: {}",
             out.predicted_f
+        );
+    }
+
+    #[test]
+    fn slow_k_solar_bump_is_bounded_no_runaway() {
+        // Regression: the deployed spa (k0≈0.009, g=0.6) has an uncapped solar
+        // offset (g/k)*I ≈ 40 °F, so a sunny projection would drag a 104 °F spa
+        // UP toward a ~130 °F "equilibrium" — the observed "spa estimated at
+        // 114 °F" bug. With the bump capped, the daytime target sits at most
+        // SOLAR_EQUILIBRIUM_BUMP_MAX_F above air (86+15=101 < 104), so an
+        // unheated spa can only COOL over the gap, never warm past its anchor.
+        let params = CoolingParams {
+            k0_per_hour: 0.0091,
+            k_wind_per_hour_per_mph: 0.0,
+            evap_a: 0.0,
+            evap_b: 0.0,
+            solar_gain_f: 0.6,
+            max_projection_hours: 8760.0,
+        };
+        // A long, strong-daylight window centred on solar noon.
+        let noon = unix_secs_for(172, 20.0) * 1000;
+        let start = noon - 3 * HOUR_MS;
+        let end = noon + 6 * HOUR_MS; // ~9 h of daytime sun
+        let air = 86.0;
+        let seg = solar_segment(start, end, air, SITE_LAT, SITE_LON, 0.0, 0.75);
+        let out = project_temperature(anchor(104.0, start), &[seg], &params, end);
+
+        // Must not warm above the anchor (uncapped it would end ~106 °F+).
+        assert!(
+            out.predicted_f < 104.0,
+            "capped solar must not warm a 104 °F spa above its anchor over a sunny gap: {}",
+            out.predicted_f
+        );
+        // Passive relaxation can never carry the water past the wider of the
+        // anchor and the bounded daytime equilibrium (here the anchor, since the
+        // spa starts above the capped 101 °F target and only cools toward it).
+        let ceiling = 104.0_f64.max(air + SOLAR_EQUILIBRIUM_BUMP_MAX_F);
+        assert!(
+            out.predicted_f <= ceiling + 1.0e-6,
+            "projected temp {} exceeds the physical ceiling {}",
+            out.predicted_f,
+            ceiling
         );
     }
 
