@@ -656,6 +656,25 @@ fn golden_section_min<F: Fn(f64) -> f64>(f: F, mut lo: f64, mut hi: f64) -> f64 
 /// daytime fit is rejected back to the seed `g` if it lands outside `[0, this]`.
 const SOLAR_GAIN_MAX: f64 = 1.0;
 
+/// Minimum daytime (solar > 0) sample pairs required before the solar gain `g`
+/// is fitted at all. With fewer, `g` is unidentifiable against `k` — they trade
+/// off, so the optimizer can absorb model error into a large `g` (how the
+/// deployed spa/pool drifted to `g≈0.6–0.75` from one or two sunny intervals).
+/// Below this the fit holds the seed `g`.
+const MIN_DAYTIME_PAIRS_FOR_G: usize = 3;
+
+/// Reference absorbed midday irradiance (kW/m²) used to bound the fitted solar
+/// gain: `g` is capped so its implied daytime equilibrium bump `(g/k)·I_ref`
+/// stays within [`SOLAR_EQUILIBRIUM_BUMP_MAX_F`], mirroring the projector's cap
+/// so the store can never persist an absurd gain.
+const SOLAR_FIT_REFERENCE_IRRADIANCE_KW: f64 = 0.8;
+
+/// Fractional margin off the `tau` rails within which a fit is treated as
+/// under-identified. A fit that slides `k` to a bound is absorbing model error
+/// rather than measuring cooling (the pool's drift to `tau≈193h` against the
+/// 200h rail); such a fit is rejected back to the seed instead of persisted.
+const TAU_RAIL_MARGIN: f64 = 0.1;
+
 /// One usable consecutive-sample interval for the fit:
 /// `(t_start, t_end, dt_hours, air, irradiance_kw_at_midpoint)`.
 type FitPair = (f64, f64, f64, f64, f64);
@@ -738,12 +757,15 @@ pub fn fit_cooling_params(
         return degenerate;
     }
 
-    // Only fit g when some interval actually sees the sun; otherwise hold the
-    // seed g (an unobservable solar gain must not be fitted from night data).
-    let has_daytime = pairs.iter().any(|&(.., irr)| irr > 0.0);
+    // Only fit g when enough intervals actually see the sun; otherwise hold the
+    // seed g. A single sunny interval leaves g unobservable against k (they
+    // trade off), so we require MIN_DAYTIME_PAIRS_FOR_G before trusting g and
+    // never fit it from night-only data.
+    let daytime_pairs = pairs.iter().filter(|&&(.., irr)| irr > 0.0).count();
+    let fit_solar = daytime_pairs >= MIN_DAYTIME_PAIRS_FOR_G;
 
     let sse = |k: f64| -> f64 {
-        let g = if has_daytime {
+        let g = if fit_solar {
             best_solar_gain_for_k(&pairs, k).clamp(0.0, SOLAR_GAIN_MAX)
         } else {
             seed.solar_gain_f
@@ -781,13 +803,28 @@ pub fn fit_cooling_params(
         return degenerate;
     }
 
-    // Resolve the solar gain at the chosen k (seed when unobservable).
-    let g = if has_daytime {
+    // Reject fits that slam the tau rails: a `k` pinned against a bound is a
+    // symptom of under-identified data (too few / too weak intervals), where the
+    // optimizer slid `k` to the extreme to absorb model error rather than
+    // measuring real cooling. Hold the seed rather than persist an implausible
+    // tau (the pool's drift to ~193h against the 200h rail).
+    let tau_lo = TAU_MIN_HOURS * (1.0 + TAU_RAIL_MARGIN);
+    let tau_hi = TAU_MAX_HOURS * (1.0 - TAU_RAIL_MARGIN);
+    if !(tau_lo..=tau_hi).contains(&tau) {
+        return degenerate;
+    }
+
+    // Resolve the solar gain at the chosen k (seed when unobservable), capped so
+    // its implied daytime bump `(g/k)·I_ref` stays within the physical ceiling
+    // — the store must never persist a gain the projector would clamp away.
+    let g = if fit_solar {
+        let g_ceiling =
+            (SOLAR_EQUILIBRIUM_BUMP_MAX_F * k / SOLAR_FIT_REFERENCE_IRRADIANCE_KW).min(SOLAR_GAIN_MAX);
         let fitted = best_solar_gain_for_k(&pairs, k);
-        if fitted.is_finite() && (0.0..=SOLAR_GAIN_MAX).contains(&fitted) {
-            fitted
+        if fitted.is_finite() && fitted >= 0.0 {
+            fitted.min(g_ceiling)
         } else {
-            seed.solar_gain_f
+            seed.solar_gain_f.min(g_ceiling)
         }
     } else {
         seed.solar_gain_f
@@ -1569,6 +1606,79 @@ mod tests {
             (0.0..=SOLAR_GAIN_MAX).contains(&fit.params.solar_gain_f),
             "fitted g must stay within sanity clamps: {}",
             fit.params.solar_gain_f
+        );
+    }
+
+    #[test]
+    fn fit_holds_seed_g_without_enough_daytime_pairs() {
+        // Two daytime pairs (< MIN_DAYTIME_PAIRS_FOR_G) that "want" a large g —
+        // the water rises above air across noon. g is unidentifiable from so few
+        // sunny intervals and must stay at the seed, not chase the sparse signal
+        // (this is how the spa, with 2 intervals, drifted to g=0.6).
+        let mut seed = CoolingParams::seed();
+        seed.solar_gain_f = 0.09;
+        let air = 80.0;
+        let noon = unix_secs_for(172, 20.0);
+        let mut samples = Vec::new();
+        let mut weather = Vec::new();
+        for i in 0..3 {
+            let at_ms = (noon + i as i64 * 3600) * 1000;
+            samples.push(ReliableSample {
+                temperature_f: air + 8.0 * i as f64,
+                observed_at_unix_ms: at_ms,
+            });
+            weather.push(solar_segment(at_ms, at_ms + HOUR_MS, air, SITE_LAT, SITE_LON, 0.0, 0.75));
+        }
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        assert_eq!(
+            fit.params.solar_gain_f, seed.solar_gain_f,
+            "with fewer than {} daytime pairs, g must stay at the seed",
+            MIN_DAYTIME_PAIRS_FOR_G
+        );
+    }
+
+    #[test]
+    fn fit_rejects_tau_rail_slam() {
+        // Near-flat samples: a big contrast with air but almost no cooling drives
+        // k toward its lower rail (tau -> 200h). That under-identified fit must
+        // fall back to the seed, not persist an implausible tau (the pool's
+        // observed drift to ~193h).
+        let seed = CoolingParams::seed();
+        let air = 60.0;
+        let mut samples = Vec::new();
+        for i in 0..6 {
+            samples.push(ReliableSample {
+                temperature_f: 90.0 - 0.002 * i as f64,
+                observed_at_unix_ms: i as i64 * HOUR_MS,
+            });
+        }
+        let weather = vec![cooling_only_segment(-HOUR_MS, 6 * HOUR_MS, air)];
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        assert_eq!(
+            fit.params.k0_per_hour, seed.k0_per_hour,
+            "tau-rail fit must fall back to the seed k, got tau={}h",
+            1.0 / fit.params.k0_per_hour
+        );
+        assert_eq!(fit.confidence, PredictionConfidence::Low);
+    }
+
+    #[test]
+    fn fit_caps_fitted_g_to_physical_bump_equivalent() {
+        // Enough daytime pairs, but data implying a very large g at a small k.
+        // The adopted g must respect the same physical bump ceiling the
+        // projector enforces: (g/k)*I_ref <= SOLAR_EQUILIBRIUM_BUMP_MAX_F.
+        let seed = CoolingParams::seed();
+        let (samples, weather) = synthetic_daytime(85.0, 85.0, 0.012, 0.9, 16.0, 9);
+        let fit = fit_cooling_params(&samples, &weather, &seed);
+        let bump =
+            fit.params.solar_gain_f / fit.params.k0_per_hour * SOLAR_FIT_REFERENCE_IRRADIANCE_KW;
+        assert!(
+            bump <= SOLAR_EQUILIBRIUM_BUMP_MAX_F + 1.0e-6,
+            "fitted g={} at k={} implies a daytime bump {} over the {} cap",
+            fit.params.solar_gain_f,
+            fit.params.k0_per_hour,
+            bump,
+            SOLAR_EQUILIBRIUM_BUMP_MAX_F
         );
     }
 }
